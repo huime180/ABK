@@ -175,6 +175,9 @@ object KernelSupport {
             kernelVersion = line.kernelVersion,
             subLevel = subLevel,
             osPatchLevel = osPatch,
+            kernelsuBranch = normalizeKsuBranch(
+                config.kernelsuBranch
+            ),
             virtualizationSupport = normalizeVirtualizationSupport(line.kernelVersion, config.virtualizationSupport),
             customExternalModules = config.customExternalModules.orEmpty()
                 .mapNotNull { module ->
@@ -188,8 +191,14 @@ object KernelSupport {
                         )
                     }
                 }
+                .distinctBy { it.url.lowercase() to CustomExternalModuleStage.normalize(it.stage) }
         )
     }
+
+    fun ksuBranchOptions(): List<String> = KSU_BRANCH_STANDARD_OPTIONS
+
+    fun normalizeKsuBranch(value: String): String =
+        value.takeIf { it in KSU_BRANCH_STANDARD_OPTIONS } ?: KSU_BRANCH_STABLE
 
     fun virtualizationSupportOptions(kernelVersion: String): List<String> =
         if (kernelVersion == "6.12") listOf("off", "on") else listOf("off", "678", "123", "345")

@@ -43,11 +43,11 @@ on:
 
       # ==================== 功能开关 ====================
       use_zram:
-        required: true
+        required: false
         type: boolean
         default: true
       use_bbg:
-        required: true
+        required: false
         type: boolean
         default: true
       use_ddk:
@@ -55,15 +55,15 @@ on:
         type: boolean
         default: false
       use_ntsync:
-        required: true
+        required: false
         type: boolean
         default: true
       use_networking:
-        required: true
+        required: false
         type: boolean
         default: true
       use_kpm:
-        required: true
+        required: false
         type: boolean
         default: true
       use_rekernel:
@@ -71,7 +71,7 @@ on:
         type: boolean
         default: false
       enable_susfs:
-        required: true
+        required: false
         type: boolean
         default: true
       supp_op:
@@ -105,6 +105,18 @@ on:
         type: boolean
         default: false
       custom_external_modules:
+        required: false
+        type: string
+        default: ""
+      manager_package:
+        required: false
+        type: string
+        default: ""
+      manager_cert_size:
+        required: false
+        type: string
+        default: ""
+      manager_cert_sha256:
         required: false
         type: string
         default: ""
@@ -149,6 +161,12 @@ jobs:
             echo "EFFECTIVE_ZRAM_EXTRA_ALGOS=$effective_zram_extra_algos"
           } >> "$GITHUB_ENV"
 
+          effective_ksu_branch="${{ inputs.ksu_branch }}"
+          if [ "$effective_ksu_branch" = "SUSFS(自动)" ]; then
+            effective_ksu_branch="Stable(标准)"
+          fi
+          echo "EFFECTIVE_KSU_BRANCH=$effective_ksu_branch" >> "$GITHUB_ENV"
+
           zram_extra_label="${effective_zram_extra_algos:-无}"
 
           echo "========================================"
@@ -159,7 +177,8 @@ jobs:
           echo "子版本号      : ${{ inputs.sub_level }}"
           echo "补丁级别      : ${{ inputs.os_patch_level }}"
           echo "KSU 变体      : ${{ inputs.ksu_variant }}"
-          echo "KSU 分支      : ${{ inputs.ksu_branch }}"
+          echo "KSU 分支      : $effective_ksu_branch"
+          echo "管理器包名    : ${{ inputs.manager_package || 'app/signing/abk-manager-cert.env' }}"
           echo "构建时间      : ${{ inputs.build_time }}"
           echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
           echo "ZRAM 增强     : $effective_use_zram"
@@ -369,6 +388,70 @@ jobs:
 
       - name: 检出代码仓库
         uses: actions/checkout@v6
+
+      - name: 准备 ABK 管理器证书元数据
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read_cert_value() {
+            local key="$1"
+            local file="$GITHUB_WORKSPACE/app/signing/abk-manager-cert.env"
+            [ -f "$file" ] || return 0
+            awk -F= -v target="$key" '
+              /^[[:space:]]*#/ { next }
+              $1 == target {
+                value = substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]\042\047]+|[[:space:]\042\047]+$/, "", value)
+                print value
+                exit
+              }
+            ' "$file"
+          }
+
+          package="${{ inputs.manager_package }}"
+          cert_size="${{ inputs.manager_cert_size }}"
+          cert_sha="${{ inputs.manager_cert_sha256 }}"
+
+          [ -n "$package" ] || package="$(read_cert_value ABK_MANAGER_PACKAGE)"
+          [ -n "$cert_size" ] || cert_size="$(read_cert_value ABK_MANAGER_CERT_SIZE)"
+          [ -n "$cert_sha" ] || cert_sha="$(read_cert_value ABK_MANAGER_CERT_SHA256)"
+
+          package="${package:-com.abk.kernel}"
+          cert_size="${cert_size:-1407}"
+          cert_sha="${cert_sha:-34e5e843952277759603cd0f949770b24c868530d80d7baeff08776a7e132b16}"
+          cert_sha="$(printf '%s' "$cert_sha" | tr '[:upper:]' '[:lower:]')"
+
+          if ! [[ "$package" =~ ^[A-Za-z0-9_.]+$ ]]; then
+            echo "::error::ABK manager package is invalid: $package"
+            exit 1
+          fi
+          if ! [[ "$cert_size" =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]]; then
+            echo "::error::ABK manager certificate size is invalid: $cert_size"
+            exit 1
+          fi
+          if ! [[ "$cert_sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::ABK manager certificate SHA-256 is invalid: $cert_sha"
+            exit 1
+          fi
+
+          {
+            echo "ABK_MANAGER_PACKAGE=$package"
+            echo "ABK_MANAGER_CERT_SIZE=$cert_size"
+            echo "ABK_MANAGER_CERT_SHA256=$cert_sha"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "### ABK manager identity"
+            echo
+            echo "- Package: \`$package\`"
+            echo "- Certificate size: \`$cert_size\`"
+            echo "- Certificate SHA-256: \`$cert_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "ABK manager package: $package"
+          echo "ABK manager cert size: $cert_size"
+          echo "ABK manager cert sha256: $cert_sha"
 
       - name: 初始化构建环境
         run: |
@@ -700,40 +783,50 @@ jobs:
         run: |
           branch_input="${{ inputs.ksu_branch }}"
           variant_input="${{ inputs.ksu_variant }}"
-          KSU_OFFICIAL_COMMIT="3f388ef137c78e1ca0c92c0ada3b8717cdcc4302"
-          SUKISU_COMMIT="6a316b122eb3ee6a03203d6e7241a8437dd17e1c"
-          RESUKISU_COMMIT="0d096be05c40338205bc183f5ec072233e15f9c0"
+          OFFICIAL_STABLE_REF="3f388ef137c78e1ca0c92c0ada3b8717cdcc4302"
+          SUKISU_STABLE_REF="a992f224f5ea5a69b56ba20e925379c9a226f2b2"
+          RESUKISU_STABLE_REF="3d790eaaabe9e7e33d938bbf836e0f247121e79e"
 
-          if [ "$variant_input" = "Official" ]; then
-            BRANCH="-s $KSU_OFFICIAL_COMMIT"
-          elif [ "$variant_input" = "SukiSU" ]; then
-            BRANCH="-s $SUKISU_COMMIT"
-          elif [ "$variant_input" = "ReSukiSU" ]; then
-            BRANCH="$RESUKISU_COMMIT"
-          else
-            case "$branch_input" in
-              "Stable(标准)")
-                case "$variant_input" in
-                  "Next") ;;
-                  *) BRANCH="-" ;;
-                esac
-                ;;
-              "Dev(开发)")
-                case "$variant_input" in
-                  "Next") ;;
-                  *) echo "未知变体: $variant_input" >&2; exit 1 ;;
-                esac
-                ;;
-              *)
-                echo "未知分支: $branch_input" >&2
-                exit 1
-                ;;
-            esac
+          # Dev 固定引用先完整复制 Stable 配置，后续只改这里的 *_DEV_REF 即可。
+          OFFICIAL_DEV_REF="290609c945728fc93d85735918793567588103c1"
+          SUKISU_DEV_REF="4610456736ba3a3c9a00ad618aa0f4ccc4db5b70"
+          RESUKISU_DEV_REF="fb771414f249ab886c09f2cfcbbf91c4b4dab2d1"
 
+          if [ "$branch_input" = "SUSFS(自动)" ]; then
+            echo "SUSFS(自动) 已取消独立分支，按 Stable 处理。"
+            branch_input="Stable(标准)"
           fi
 
+          case "$branch_input" in
+            "Stable(标准)")
+              OFFICIAL_REF="$OFFICIAL_STABLE_REF"
+              SUKISU_REF="$SUKISU_STABLE_REF"
+              RESUKISU_REF="$RESUKISU_STABLE_REF"
+              NEXT_BRANCH="main"
+              ;;
+            "Dev(开发)")
+              OFFICIAL_REF="$OFFICIAL_DEV_REF"
+              SUKISU_REF="$SUKISU_DEV_REF"
+              RESUKISU_REF="$RESUKISU_DEV_REF"
+              NEXT_BRANCH="dev"
+              ;;
+            *)
+              echo "未知分支: $branch_input" >&2
+              exit 1
+              ;;
+          esac
+
+          case "$variant_input" in
+            "Official") BRANCH="-s $OFFICIAL_REF" ;;
+            "SukiSU") BRANCH="-s $SUKISU_REF" ;;
+            "ReSukiSU") BRANCH="$RESUKISU_REF" ;;
+            "Next") BRANCH="$NEXT_BRANCH" ;;
+            *) echo "未知变体: $variant_input" >&2; exit 1 ;;
+          esac
+
+          echo "EFFECTIVE_KSU_BRANCH=$branch_input" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH" >> $GITHUB_ENV
-          echo "KSU 分支: $BRANCH"
+          echo "KSU 分支: $branch_input -> $BRANCH"
 
       - name: 添加 KernelSU
         if: inputs.ksu_variant != 'None'
@@ -756,7 +849,7 @@ jobs:
               ;;
             "Next")
               echo "添加 KernelSU-Next..."
-              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh" | bash -s dev_susfs
+              curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh" | bash -s "$BRANCH"
               ;;
             "SukiSU")
               echo "添加 SukiSU..."
@@ -775,8 +868,8 @@ jobs:
             echo "KSU_LATEST_COMMIT_DATE=未知" >> $GITHUB_ENV
           fi
 
-      - name: 修复 SukiSU/ReSukiSU SUSFS 源码兼容
-        if: (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'ReSukiSU') && inputs.enable_susfs && inputs.ksu_variant != 'None'
+      - name: 修复 ReSukiSU SUSFS 源码兼容
+        if: inputs.ksu_variant == 'ReSukiSU' && inputs.enable_susfs && inputs.ksu_variant != 'None'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euo pipefail
@@ -1039,8 +1132,11 @@ jobs:
 
               cd ..
               ;;
-            "Next"|"SukiSU"|"ReSukiSU")
-              echo "Next/SukiSU/ReSukiSU 使用内置 SUSFS 支持"
+            "Next"|"ReSukiSU")
+              echo "Next/ReSukiSU 使用内置 SUSFS 支持"
+              ;;
+            "SukiSU")
+              echo "SukiSU 跳过 SUSFS Kconfig，仅保留按版本收窄的源码兼容处理"
               ;;
           esac
 
@@ -1187,6 +1283,75 @@ jobs:
               fi
             }
 
+            fix_sukisu_fdinfo_mask_decl() {
+              if [ "${{ inputs.ksu_variant }}" != "SukiSU" ]; then
+                return 0
+              fi
+
+              local file="./fs/notify/fdinfo.c"
+              [ -f "$file" ] || return 0
+
+              python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("./fs/notify/fdinfo.c")
+          lines = path.read_text().splitlines(keepends=True)
+
+          start = None
+          for index, line in enumerate(lines):
+              if re.match(r"\s*static\s+void\s+inotify_fdinfo\s*\(", line):
+                  start = index
+                  break
+
+          if start is None:
+              raise SystemExit(0)
+
+          brace_line = None
+          for index in range(start, len(lines)):
+              if "{" in lines[index]:
+                  brace_line = index
+                  break
+
+          if brace_line is None:
+              raise SystemExit(0)
+
+          depth = 0
+          end = None
+          for index in range(brace_line, len(lines)):
+              depth += lines[index].count("{")
+              depth -= lines[index].count("}")
+              if index > brace_line and depth <= 0:
+                  end = index
+                  break
+
+          if end is None:
+              raise SystemExit(0)
+
+          body = "".join(lines[brace_line + 1:end])
+          if "mask, mark->ignored_mask" not in body:
+              raise SystemExit(0)
+
+          decl_re = re.compile(r"^\s*u32\s+mask\s*(?:=\s*mark->mask\s*&\s*IN_ALL_EVENTS)?\s*;\s*(?:/\*.*\*/\s*)?$")
+          new_body = [
+              line for line in lines[brace_line + 1:end]
+              if not decl_re.match(line)
+          ]
+          new_lines = (
+              lines[:brace_line + 1]
+              + ["\tu32 mask = mark->mask & IN_ALL_EVENTS;\n"]
+              + new_body
+              + lines[end:]
+          )
+
+          if new_lines != lines:
+              path.write_text("".join(new_lines))
+              print("已修复 SukiSU fdinfo.c 中 mask 声明作用域")
+          else:
+              print("SukiSU fdinfo.c mask 声明无需修改")
+          PY
+            }
+
             # Android 12 - 5.10 修复
             if [[ "${{ inputs.android_version }}" == "android12" && "${{ inputs.kernel_version }}" == "5.10" ]]; then
               if [[ "$CURRENT_SUB" -le 209 ]]; then
@@ -1195,10 +1360,17 @@ jobs:
               if [[ "$CURRENT_SUB" -le 117 ]]; then
                 cp $KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a12-5.10/fdinfo.c.patch ./
                 patch -p1 < fdinfo.c.patch || true
+                fix_sukisu_fdinfo_mask_decl
               fi
               if [[ "$CURRENT_SUB" -le 43 ]]; then
                 cp $KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a12-5.10/base.c.patch ./
                 patch -p1 < base.c.patch || true
+                if [[ "${{ inputs.ksu_variant }}" == "SukiSU" && "${{ inputs.use_bbg }}" == "true" ]]; then
+                  fix_proc_base_missing_vma_decl
+                fi
+                if [[ "${{ inputs.ksu_variant }}" == "Official" && "${{ inputs.use_bbg }}" == "true" && "$CURRENT_SUB" -eq 43 ]]; then
+                  fix_proc_base_missing_vma_decl
+                fi
                 if [[ "${{ inputs.ksu_variant }}" == "ReSukiSU" && "$CURRENT_SUB" -eq 43 ]]; then
                   fix_proc_base_missing_vma_decl
                 fi
@@ -1238,6 +1410,7 @@ jobs:
                 fi
                 cp $KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a13-5.15/fdinfo.c.patch ./
                 patch -p1 < fdinfo.c.patch || true
+                fix_sukisu_fdinfo_mask_decl
                 cp $KERNEL_PATCHES/wild/susfs_fix_patches/v${SUSFS_VERSION}/a13-5.15/open.c.patch ./
                 patch -p1 < open.c.patch || true
               fi
@@ -2059,8 +2232,30 @@ jobs:
         if: inputs.use_custom_external_modules
         env:
           CUSTOM_EXTERNAL_MODULE_STAGE: after_patch
+          ABK_BUILD_ANDROID_VERSION: ${{ inputs.android_version }}
+          ABK_BUILD_KERNEL_VERSION: ${{ inputs.kernel_version }}
+          ABK_BUILD_SUB_LEVEL: ${{ inputs.sub_level }}
+          ABK_BUILD_OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
+          ABK_BUILD_REVISION: ${{ inputs.revision }}
+          ABK_BUILD_KSU_VARIANT: ${{ inputs.ksu_variant }}
+          ABK_BUILD_KSU_BRANCH: ${{ inputs.ksu_branch }}
+          ABK_BUILD_VERSION: ${{ inputs.version }}
+          ABK_BUILD_TIME: ${{ inputs.build_time }}
+          ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
+          ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
+          ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
+          ABK_FEATURE_USE_NTSYNC: ${{ inputs.use_ntsync }}
+          ABK_FEATURE_USE_NETWORKING: ${{ inputs.use_networking }}
+          ABK_FEATURE_USE_KPM: ${{ inputs.use_kpm }}
+          ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
+          ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
+          ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
+          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
+          export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
 
           manifest="$CUSTOM_EXTERNAL_MODULES_MANIFEST"
           if [ ! -s "$manifest" ]; then
@@ -2135,6 +2330,11 @@ jobs:
       - name: 添加 SUSFS 配置
         if: inputs.enable_susfs && inputs.ksu_variant != 'None'
         run: |
+          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ]; then
+            echo "::warning::SukiSU 固定源码缺少完整 SUSFS 导出符号，跳过 CONFIG_KSU_SUSFS* 写入以避免链接失败"
+            exit 0
+          fi
+
           cat >> "$DEFCONFIG" << 'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -2221,8 +2421,30 @@ jobs:
         if: inputs.use_custom_external_modules
         env:
           CUSTOM_EXTERNAL_MODULE_STAGE: before_build
+          ABK_BUILD_ANDROID_VERSION: ${{ inputs.android_version }}
+          ABK_BUILD_KERNEL_VERSION: ${{ inputs.kernel_version }}
+          ABK_BUILD_SUB_LEVEL: ${{ inputs.sub_level }}
+          ABK_BUILD_OS_PATCH_LEVEL: ${{ inputs.os_patch_level }}
+          ABK_BUILD_REVISION: ${{ inputs.revision }}
+          ABK_BUILD_KSU_VARIANT: ${{ inputs.ksu_variant }}
+          ABK_BUILD_KSU_BRANCH: ${{ inputs.ksu_branch }}
+          ABK_BUILD_VERSION: ${{ inputs.version }}
+          ABK_BUILD_TIME: ${{ inputs.build_time }}
+          ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
+          ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
+          ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
+          ABK_FEATURE_USE_NTSYNC: ${{ inputs.use_ntsync }}
+          ABK_FEATURE_USE_NETWORKING: ${{ inputs.use_networking }}
+          ABK_FEATURE_USE_KPM: ${{ inputs.use_kpm }}
+          ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
+          ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
+          ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
+          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
+          export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
 
           manifest="$CUSTOM_EXTERNAL_MODULES_MANIFEST"
           if [ ! -s "$manifest" ]; then
@@ -2687,6 +2909,122 @@ jobs:
           if not changed:
               print("SukiSU/ReSukiSU android16-6.12 专项兼容修复无需修改。")
           PY
+
+      - name: 校验 ABK 管理器桥接
+        if: inputs.use_custom_external_modules && inputs.ksu_variant != 'None'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euo pipefail
+
+          needs_abk_control=false
+          manifest="$CUSTOM_EXTERNAL_MODULES_MANIFEST"
+          if [ -s "$manifest" ]; then
+            while IFS=$'\t' read -r _stage module_dir repo_url; do
+              if [ -f "$module_dir/module.conf" ] \
+                && grep -Eq '^[[:space:]]*ABK_MODULE_ID=' "$module_dir/module.conf" \
+                && grep -qF 'abk_control' "$module_dir/module.conf"; then
+                needs_abk_control=true
+              fi
+              case "$repo_url" in
+                *ABK_control_module*|*abk_control_module*) needs_abk_control=true ;;
+              esac
+            done < "$manifest"
+          fi
+
+          if [ "$needs_abk_control" != "true" ]; then
+            echo "未检测到 ABK Control 外部模块，跳过管理器桥接校验。"
+            exit 0
+          fi
+
+          echo "校验 ABK Control 管理器桥接:"
+          echo "  package: ${ABK_MANAGER_PACKAGE:-}"
+          echo "  cert size: ${ABK_MANAGER_CERT_SIZE:-}"
+          echo "  cert sha256: ${ABK_MANAGER_CERT_SHA256:-}"
+
+          require_marker() {
+            local file="$1"
+            shift
+            if [ ! -f "$file" ]; then
+              echo "::error::缺少 ABK 管理器桥接文件: $file"
+              exit 1
+            fi
+            local marker
+            for marker in "$@"; do
+              if ! grep -qF "$marker" "$file"; then
+                echo "::error::$file 缺少 ABK 管理器桥接标记: $marker"
+                exit 1
+              fi
+            done
+          }
+
+          found_ksu=false
+          for ksu_dir in common/drivers/kernelsu drivers/kernelsu KernelSU/kernel kernel; do
+            [ -d "$ksu_dir" ] || continue
+            if [ ! -f "$ksu_dir/Kbuild" ] \
+              || [ ! -f "$ksu_dir/manager/apk_sign.c" ] \
+              || [ ! -f "$ksu_dir/supercall/dispatch.c" ]; then
+              echo "跳过非 KernelSU 源码目录: $ksu_dir"
+              continue
+            fi
+            found_ksu=true
+            echo "检查 KSU 源码目录: $ksu_dir"
+            require_marker "$ksu_dir/Kbuild" \
+              "ABK_MANAGER_PACKAGE" \
+              "${ABK_MANAGER_PACKAGE:-com.abk.kernel}" \
+              "ABK_MANAGER_CERT_SIZE" \
+              "${ABK_MANAGER_CERT_SIZE:-1407}" \
+              "ABK_MANAGER_CERT_SHA256" \
+              "${ABK_MANAGER_CERT_SHA256:-34e5e843952277759603cd0f949770b24c868530d80d7baeff08776a7e132b16}" \
+              "ABK_MANAGER_CERT_MAX_LENGTH" \
+              "ABK_MANAGER_OFFICIAL_CERT"
+            require_marker "$ksu_dir/manager/apk_sign.c" "ABK_MANAGER_CERT_SHA256" "ABK_MANAGER_CERT_MAX_LENGTH"
+            require_marker "$ksu_dir/manager/throne_tracker.h" "abk_try_register_manager"
+            require_marker "$ksu_dir/manager/throne_tracker.c" "abk_try_register_manager"
+            require_marker "$ksu_dir/supercall/dispatch.c" \
+              "abk_try_register_manager" \
+              "KSU_GET_INFO_FLAG_MANAGER" \
+              "ABK_CONTROL_IOCTL_GET_STATUS"
+
+            if grep -qF "TRACK_THRONE_FORCE_SEARCH_MGR" "$ksu_dir/manager/throne_tracker.h"; then
+              echo "检测到 ReSukiSU 多管理器实现，跳过 KernelSU/SukiSU 多管理器移植标记。"
+            else
+              require_marker "$ksu_dir/manager/manager_identity.h" \
+                "ABK_MANAGER_MULTI_MANAGER_BRIDGE" \
+                "ksu_register_manager" \
+                "ksu_has_manager"
+              require_marker "$ksu_dir/manager/throne_tracker.c" \
+                "ABK_MANAGER_MULTI_MANAGER_BRIDGE" \
+                "abk_prune_missing_managers" \
+                "ksu_register_manager"
+              if [ -f "$ksu_dir/policy/allowlist.c" ]; then
+                require_marker "$ksu_dir/policy/allowlist.c" "is_uid_manager(uid)"
+              fi
+              if grep -qF "ABK Control: prefer ABK manager" "$ksu_dir/manager/throne_tracker.c"; then
+                echo "::error::$ksu_dir/manager/throne_tracker.c 仍包含旧的 ABK 优先抢占逻辑。"
+                exit 1
+              fi
+              if grep -qF "bool should_stop = get_pkg_from_apk_path" "$ksu_dir/manager/throne_tracker.c"; then
+                echo "::error::$ksu_dir/manager/throne_tracker.c 仍包含只等 ABK 后停止扫描的旧逻辑。"
+                exit 1
+              fi
+              if grep -qF "ksu_invalidate_manager_uid();" "$ksu_dir/manager/throne_tracker.c"; then
+                echo "::error::$ksu_dir/manager/throne_tracker.c 仍会在 ABK 注册时清空官方管理器。"
+                exit 1
+              fi
+            fi
+          done
+
+          if [ "$found_ksu" != "true" ]; then
+            echo "::error::未找到 KernelSU/ReSukiSU 源码目录，无法校验 ABK 管理器桥接。"
+            exit 1
+          fi
+
+          if ! grep -q '^CONFIG_ABK_CONTROL=y$' "$DEFCONFIG"; then
+            echo "::error::缺少 CONFIG_ABK_CONTROL=y；请同时选择 ABK Control 的 before_build 阶段。"
+            exit 1
+          fi
+
+          echo "ABK Control 管理器桥接校验通过。"
 
       - name: 编译内核
         uses: nick-fields/retry@v4
