@@ -240,14 +240,66 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: 解压 ntsync权限修复&ipset启用.zip
+      - name: 合并启用功能的模块
         run: |
-          mkdir -p disk
-          unzip 'modules/ntsync-ipset-helper/ntsync权限修复&ipset启用.zip' -d 'disk/ntsync&ipset'
+          rm -rf merge_module
+          mkdir -p merge_module
+          cp 'modules/main/*' merge_module/
 
-      - name: 上传ntsync&ipset模块
+          # 判断具体启用功能
+          ENABLE_FEATURES=""
+          if [ "${{ inputs.use_networking }}" = "true" ]; then
+          ENABLE_FEATURES="$ENABLE_FEATURES ipset"
+          fi
+          if [ "${{ inputs.use_ntsync }}" = "true" ]; then
+            ENABLE_FEATURES="$ENABLE_FEATURES ntsync"
+          fi
+          echo "启用功能: $ENABLE_FEATURES"
+
+          # 合并 module.prop
+          PROP="merge_module/module.prop"
+          
+          cat > "$PROP" << EOF
+          id=abk_extension
+          name=ABK-Kernel-Extension
+          version=1.0.6
+          versionCode=7
+          EOF
+
+          AUTHORS=""
+          DESC=""
+          for feature in $ENABLE_FEATURES; do
+            if [ -f "modules/$feature/module.prop" ]; then
+              A=$(grep '^author=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
+              D=$(grep '^description=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
+              [ -n "$A" ] && AUTHORS="${AUTHORS}${A}, "
+              [ -n "$D" ] && DESC="${DESC}${D}; "
+            fi
+          done
+          
+          echo "author=${AUTHORS%, }" >> "$PROP"
+          echo "description=${DESC%; }" >> "$PROP"
+          echo "module.prop 合并完成"
+
+          # 复制及拼接同名文件
+          for feature in $ENABLE_FEATURES; do
+            [ -d "modules/$feature" ] || continue
+            
+            rsync -a --ignore-existing "modules/$feature/" merge_module/
+            
+            find "modules/$feature" -type f | while read -r src; do
+              rel="${src#modules/$feature/}"
+              dst="merge_module/$rel"
+              
+              if [ -f "$dst" ] && [ "$rel" != "module.prop" ]; then
+                cat "$src" >> "$dst"
+              fi
+            done
+          done
+
+      - name: 上传扩展模块
         uses: actions/upload-artifact@v6
         with:
-          name: 'ntsync&ipset'
-          path: 'disk/ntsync&ipset/*'
+          name: abk_extension
+          path: merge_module/*
           if-no-files-found: error
