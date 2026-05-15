@@ -1,4 +1,4 @@
-name: Build ABK App
+name: Build ABK App Dev
 
 on:
   workflow_dispatch:
