@@ -242,9 +242,6 @@ jobs:
       
       - name: 合并启用功能的模块
         run: |
-          rm -rf merge_module
-          mkdir -p merge_module
-          cp 'modules/main/*' merge_module/
 
           # 判断具体启用功能
           ENABLE_FEATURES=""
@@ -257,7 +254,7 @@ jobs:
           echo "启用功能: $ENABLE_FEATURES"
 
           # 合并 module.prop
-          PROP="merge_module/module.prop"
+          PROP="modules/main/module.prop"
           
           cat > "$PROP" << EOF
           id=abk_extension
@@ -285,11 +282,11 @@ jobs:
           for feature in $ENABLE_FEATURES; do
             [ -d "modules/$feature" ] || continue
             
-            rsync -a --ignore-existing "modules/$feature/" merge_module/
+            rsync -a --ignore-existing "modules/$feature/" modules/main/
             
             find "modules/$feature" -type f | while read -r src; do
               rel="${src#modules/$feature/}"
-              dst="merge_module/$rel"
+              dst="modules/main/$rel"
               
               if [ -f "$dst" ] && [ "$rel" != "module.prop" ]; then
                 cat "$src" >> "$dst"
@@ -301,5 +298,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: abk_extension
-          path: merge_module/*
+          path: modules/main/*
           if-no-files-found: error
