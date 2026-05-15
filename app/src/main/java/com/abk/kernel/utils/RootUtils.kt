@@ -562,19 +562,19 @@ object RootUtils {
 
     fun setSuCompatMode(mode: Int): ShellResult {
         return when (mode) {
-            0 -> setKsuFeatureValue(FEATURE_SU_COMPAT, 1L, persist = true)
+            0 -> setNativeKsuFeatureValue(FEATURE_SU_COMPAT, 1L, persist = true)
             1 -> {
-                val persistedEnabled = setKsuFeatureValue(FEATURE_SU_COMPAT, 1L, persist = true)
+                val persistedEnabled = setNativeKsuFeatureValue(FEATURE_SU_COMPAT, 1L, persist = true)
                 if (!persistedEnabled.success) {
                     persistedEnabled
                 } else {
                     mergeShellResults(
                         persistedEnabled,
-                        setKsuFeatureValue(FEATURE_SU_COMPAT, 0L, persist = false)
+                        setNativeKsuFeatureValue(FEATURE_SU_COMPAT, 0L, persist = false)
                     )
                 }
             }
-            2 -> setKsuFeatureValue(FEATURE_SU_COMPAT, 0L, persist = true)
+            2 -> setNativeKsuFeatureValue(FEATURE_SU_COMPAT, 0L, persist = true)
             else -> ShellResult(false, listOf("未知 su 兼容模式"))
         }
     }
@@ -594,6 +594,8 @@ object RootUtils {
                     saveKsuFeatureConfig()
                 )
             }
+        } else if (feature == FEATURE_SELINUX_HIDE) {
+            setNativeKsuFeatureValue(feature, value, persist = true)
         } else {
             setKsuFeatureValue(feature, value, persist = true)
         }
@@ -904,6 +906,23 @@ object RootUtils {
             "feature set ${shellQuote(featureName)} $value",
             timeoutSeconds = 30L
         )
+        if (!setResult.success || !persist) return setResult
+        return mergeShellResults(setResult, saveKsuFeatureConfig())
+    }
+
+    private fun setNativeKsuFeatureValue(featureName: String, value: Long, persist: Boolean): ShellResult {
+        val enabled = value != 0L
+        val setResult = when (featureName) {
+            FEATURE_SU_COMPAT -> {
+                val ok = AbkKsuNative.setSuEnabled(enabled)
+                ShellResult(ok, if (ok) emptyList() else listOf("传统 su 命令支持切换失败"))
+            }
+            FEATURE_SELINUX_HIDE -> {
+                val code = AbkKsuNative.setSelinuxHideEnabled(enabled)
+                ShellResult(code == 0, if (code == 0) emptyList() else listOf("隐藏 SELinux 修改切换失败: $code"))
+            }
+            else -> setKsuFeatureValue(featureName, value, persist = false)
+        }
         if (!setResult.success || !persist) return setResult
         return mergeShellResults(setResult, saveKsuFeatureConfig())
     }

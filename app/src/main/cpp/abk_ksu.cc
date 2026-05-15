@@ -204,11 +204,10 @@ int get_app_profile(app_profile *profile) {
     return ret;
 }
 
+static inline bool set_feature(uint32_t feature_id, uint64_t value);
+
 bool set_su_enabled(bool enabled) {
-    struct ksu_set_feature_cmd cmd = {};
-    cmd.feature_id = KSU_FEATURE_SU_COMPAT;
-    cmd.value = enabled ? 1 : 0;
-    return ksuctl(KSU_IOCTL_SET_FEATURE, &cmd) == 0;
+    return set_feature(KSU_FEATURE_SU_COMPAT, enabled ? 1 : 0);
 }
 
 bool is_su_enabled() {
@@ -238,7 +237,17 @@ static inline bool set_feature(uint32_t feature_id, uint64_t value) {
     struct ksu_set_feature_cmd cmd = {};
     cmd.feature_id = feature_id;
     cmd.value = value;
-    return ksuctl(KSU_IOCTL_SET_FEATURE, &cmd) == 0;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        errno = 0;
+        if (ksuctl(KSU_IOCTL_SET_FEATURE, &cmd) == 0) {
+            return true;
+        }
+        if (errno != EAGAIN) {
+            return false;
+        }
+        usleep(20 * 1000);
+    }
+    return false;
 }
 
 bool set_kernel_umount_enabled(bool enabled) {
