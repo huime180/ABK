@@ -242,30 +242,33 @@ jobs:
       
       - name: 合并启用功能的模块
         run: |
+          echo "=== 开始合并 Magisk 扩展模块 ==="
+          echo "当前目录: $(pwd)"
+          ls -la modules/ || echo "modules 目录不存在"
 
-          # 判断具体启用功能
-          ENABLE_FEATURES=""
+          # 确定启用功能
+          ENABLE_FEATURES=()
           if [ "${{ inputs.use_networking }}" = "true" ]; then
-          ENABLE_FEATURES="$ENABLE_FEATURES ipset"
+            ENABLE_FEATURES+=("ipset")
           fi
           if [ "${{ inputs.use_ntsync }}" = "true" ]; then
-            ENABLE_FEATURES="$ENABLE_FEATURES ntsync"
+            ENABLE_FEATURES+=("ntsync")
           fi
-          echo "启用功能: $ENABLE_FEATURES"
-
-          # 合并 module.prop
-          PROP="modules/main/module.prop"
           
+          echo "启用功能: ${ENABLE_FEATURES[*]}"
+
+          # 合并 module.prop 到 main 
+          PROP="modules/main/module.prop"      
           cat > "$PROP" << EOF
           id=abk_extension
           name=ABK-Kernel-Extension
-          version=1.0.6
-          versionCode=7
+          version=${{ inputs.version }}
+          versionCode=${{ inputs.version_code }}
           EOF
 
           AUTHORS=""
           DESC=""
-          for feature in $ENABLE_FEATURES; do
+          for feature in "${ENABLE_FEATURES[@]}"; do
             if [ -f "modules/$feature/module.prop" ]; then
               A=$(grep '^author=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
               D=$(grep '^description=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
@@ -274,30 +277,37 @@ jobs:
             fi
           done
           
-          echo "author=${AUTHORS%, }" >> "$PROP"
-          echo "description=${DESC%; }" >> "$PROP"
+          [ -n "$AUTHORS" ] && echo "author=${AUTHORS%, }" >> "$PROP"
+          [ -n "$DESC" ]    && echo "description=${DESC%; }" >> "$PROP"
+          
           echo "module.prop 合并完成"
 
-          # 复制或拼接其它文件
+          # 3. 合并其他文件到 main 
           for feature in "${ENABLE_FEATURES[@]}"; do
             [ -d "modules/$feature" ] || continue
+            echo "正在合并模块: $feature"
             
-            # 遍历当前模块的所有文件
             find "modules/$feature" -type f ! -name "module.prop" | while read -r src; do
               rel="${src#modules/$feature/}"
               dst="modules/main/$rel"
               
-              # 确保目标目录存在
               mkdir -p "$(dirname "$dst")"
+              
               if [ ! -f "$dst" ]; then
                 cp -a "$src" "$dst"
+                echo "  复制: $feature/$rel"
               else
+                echo "  追加: $feature/$rel"
                 echo "" >> "$dst"
-                echo "# ================== $feature ==================" >> "$dst"
+                echo "# ================== 来自 $feature ==================" >> "$dst"
                 cat "$src" >> "$dst"
               fi
             done
           done
+
+          echo "=== 合并完成 ==="
+          echo "最终 modules/main 内容："
+          ls -R modules/main/
 
       - name: 上传扩展模块
         uses: actions/upload-artifact@v6
