@@ -278,17 +278,22 @@ jobs:
           echo "description=${DESC%; }" >> "$PROP"
           echo "module.prop 合并完成"
 
-          # 复制及拼接同名文件
-          for feature in $ENABLE_FEATURES; do
+          # 复制或拼接其它文件
+          for feature in "${ENABLE_FEATURES[@]}"; do
             [ -d "modules/$feature" ] || continue
             
-            rsync -a --ignore-existing "modules/$feature/" modules/main/
-            
-            find "modules/$feature" -type f | while read -r src; do
+            # 遍历当前模块的所有文件
+            find "modules/$feature" -type f ! -name "module.prop" | while read -r src; do
               rel="${src#modules/$feature/}"
               dst="modules/main/$rel"
               
-              if [ -f "$dst" ] && [ "$rel" != "module.prop" ]; then
+              # 确保目标目录存在
+              mkdir -p "$(dirname "$dst")"
+              if [ ! -f "$dst" ]; then
+                cp -a "$src" "$dst"
+              else
+                echo "" >> "$dst"
+                echo "# ================== $feature ==================" >> "$dst"
                 cat "$src" >> "$dst"
               fi
             done
