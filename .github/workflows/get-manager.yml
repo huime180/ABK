@@ -242,11 +242,9 @@ jobs:
       
       - name: 合并启用功能的模块
         run: |
-          echo "=== 开始合并 Magisk 扩展模块 ==="
-          echo "当前目录: $(pwd)"
+          echo "=== 开始合并扩展模块 ==="
           ls -la modules/ || echo "modules 目录不存在"
 
-          # 确定启用功能
           ENABLE_FEATURES=()
           if [ "${{ inputs.use_networking }}" = "true" ]; then
             ENABLE_FEATURES+=("ipset")
@@ -255,15 +253,14 @@ jobs:
             ENABLE_FEATURES+=("ntsync")
           fi
           
-          echo "启用功能: ${ENABLE_FEATURES[*]}"
+          echo "当前启用功能: ${ENABLE_FEATURES[*]}"
 
-          # 合并 module.prop 到 main 
           PROP="modules/main/module.prop"      
           cat > "$PROP" << EOF
           id=abk_extension
-          name=ABK-Kernel-Extension
-          version=${{ inputs.version }}
-          versionCode=${{ inputs.version_code }}
+          name=ABK-Extension
+          version=1.1.0
+          versionCode=10010
           EOF
 
           AUTHORS=""
@@ -282,7 +279,6 @@ jobs:
           
           echo "module.prop 合并完成"
 
-          # 3. 合并其他文件到 main 
           for feature in "${ENABLE_FEATURES[@]}"; do
             [ -d "modules/$feature" ] || continue
             echo "正在合并模块: $feature"
@@ -299,7 +295,7 @@ jobs:
               else
                 echo "  追加: $feature/$rel"
                 echo "" >> "$dst"
-                echo "# ================== 来自 $feature ==================" >> "$dst"
+                echo "# ========== 来自 $feature ==========" >> "$dst"
                 cat "$src" >> "$dst"
               fi
             done

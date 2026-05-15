@@ -779,6 +779,7 @@ jobs:
           echo "obj-y += hmbird_patch.o" >> Makefile
 
       - name: 确定 KernelSU 分支
+        if: inputs.ksu_variant != 'None'
         id: ksu-branch
         run: |
           branch_input="${{ inputs.ksu_branch }}"
@@ -869,8 +870,7 @@ jobs:
           fi
 
       - name: 修复 ReSukiSU SUSFS 源码兼容
-        if: inputs.ksu_variant == 'ReSukiSU' && inputs.enable_susfs && inputs.ksu_variant != 'None'
-        working-directory: ${{ env.KERNEL_ROOT }}
+        if: inputs.ksu_variant == 'ReSukiSU' && inputs.enable_susfs
         run: |
           set -euo pipefail
 
@@ -1650,7 +1650,6 @@ jobs:
           ensure_defconfig_value CONFIG_TCP_CONG_ADVANCED y
           ensure_defconfig_value CONFIG_TCP_CONG_BBR y
           ensure_defconfig_value CONFIG_TCP_CONG_CUBIC y
-          ensure_defconfig_value CONFIG_TCP_CONG_BIC y
           ensure_defconfig_value CONFIG_TCP_CONG_WESTWOOD y
           ensure_defconfig_value CONFIG_TCP_CONG_HTCP y
           ensure_defconfig_value CONFIG_DEFAULT_BBR y
