@@ -240,14 +240,78 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: 解压 ntsync权限修复&ipset启用.zip
+      - name: 合并启用功能的模块
         run: |
-          mkdir -p disk
-          unzip 'modules/ntsync-ipset-helper/ntsync权限修复&ipset启用.zip' -d 'disk/ntsync&ipset'
+          echo "=== 开始合并 Magisk 扩展模块 ==="
+          echo "当前目录: $(pwd)"
+          ls -la modules/ || echo "modules 目录不存在"
 
-      - name: 上传ntsync&ipset模块
+          # 确定启用功能
+          ENABLE_FEATURES=()
+          if [ "${{ inputs.use_networking }}" = "true" ]; then
+            ENABLE_FEATURES+=("ipset")
+          fi
+          if [ "${{ inputs.use_ntsync }}" = "true" ]; then
+            ENABLE_FEATURES+=("ntsync")
+          fi
+          
+          echo "启用功能: ${ENABLE_FEATURES[*]}"
+
+          # 合并 module.prop 到 main 
+          PROP="modules/main/module.prop"      
+          cat > "$PROP" << EOF
+          id=abk_extension
+          name=ABK-Kernel-Extension
+          version=${{ inputs.version }}
+          versionCode=${{ inputs.version_code }}
+          EOF
+
+          AUTHORS=""
+          DESC=""
+          for feature in "${ENABLE_FEATURES[@]}"; do
+            if [ -f "modules/$feature/module.prop" ]; then
+              A=$(grep '^author=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
+              D=$(grep '^description=' "modules/$feature/module.prop" | cut -d'=' -f2- | sed 's/^[[:space:]]*//')
+              [ -n "$A" ] && AUTHORS="${AUTHORS}${A}, "
+              [ -n "$D" ] && DESC="${DESC}${D}; "
+            fi
+          done
+          
+          [ -n "$AUTHORS" ] && echo "author=${AUTHORS%, }" >> "$PROP"
+          [ -n "$DESC" ]    && echo "description=${DESC%; }" >> "$PROP"
+          
+          echo "module.prop 合并完成"
+
+          # 3. 合并其他文件到 main 
+          for feature in "${ENABLE_FEATURES[@]}"; do
+            [ -d "modules/$feature" ] || continue
+            echo "正在合并模块: $feature"
+            
+            find "modules/$feature" -type f ! -name "module.prop" | while read -r src; do
+              rel="${src#modules/$feature/}"
+              dst="modules/main/$rel"
+              
+              mkdir -p "$(dirname "$dst")"
+              
+              if [ ! -f "$dst" ]; then
+                cp -a "$src" "$dst"
+                echo "  复制: $feature/$rel"
+              else
+                echo "  追加: $feature/$rel"
+                echo "" >> "$dst"
+                echo "# ================== 来自 $feature ==================" >> "$dst"
+                cat "$src" >> "$dst"
+              fi
+            done
+          done
+
+          echo "=== 合并完成 ==="
+          echo "最终 modules/main 内容："
+          ls -R modules/main/
+
+      - name: 上传扩展模块
         uses: actions/upload-artifact@v6
         with:
-          name: 'ntsync&ipset'
-          path: 'disk/ntsync&ipset/*'
+          name: abk_extension
+          path: modules/main/*
           if-no-files-found: error
