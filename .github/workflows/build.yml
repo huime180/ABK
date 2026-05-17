@@ -789,10 +789,12 @@ jobs:
           variant_input="${{ inputs.ksu_variant }}"
           SUKISU_STABLE_REF="a992f224f5ea5a69b56ba20e925379c9a226f2b2"
 
-          get_latest_release_sha() {
-          REPO="$1"
-            TAG=$(curl -s https://api.github.com/repos/$REPO/releases/latest | jq -r '.tag_name')
-            curl -s https://api.github.com/repos/$REPO/commits/$TAG | jq -r '.sha'
+          get_stable_success_sha() {
+            REPO="$1"
+            BRANCH="$2"
+            curl -s \
+              "https://api.github.com/repos/$REPO/actions/workflows/build-manager.yml/runs?status=success&branch=$BRANCH&per_page=5" \
+              | jq -r '.workflow_runs[4].head_sha'
           }
           get_latest_success_sha() {
           REPO="$1"
@@ -826,15 +828,15 @@ jobs:
 
           case "$branch_input" in
             "Stable(标准)")
-              OFFICIAL_REF="$(get_latest_success_sha "tiann/KernelSU" "main")"
+              OFFICIAL_REF="$(get_stable_success_sha "tiann/KernelSU" "main")"
               SUKISU_REF="$SUKISU_STABLE_REF"
-              RESUKISU_REF="$(get_latest_success_sha "ReSukiSU/ReSukiSU" "main")"
+              RESUKISU_REF="$(get_stable_success_sha "ReSukiSU/ReSukiSU" "main")"
               NEXT_BRANCH="main"
               ;;
             "Dev(开发)")
               OFFICIAL_REF="$(get_latest_success_sha_auto "tiann/KernelSU")"
               SUKISU_REF="builtin"
-              RESUKISU_REF="main"
+              RESUKISU_REF="$(get_stable_success_sha "ReSukiSU/ReSukiSU" "main")"
               NEXT_BRANCH="dev"
               ;;
             "Custom(自定义)")
