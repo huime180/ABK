@@ -254,6 +254,86 @@ data class PrebuiltGkiRelease(
     val assetCount: Int = 0
 )
 
+const val APP_UPDATE_STABILITY_STABLE = "stable"
+const val APP_UPDATE_STABILITY_UNSTABLE = "unstable"
+const val APP_UPDATE_LINE_NORMAL = "normal"
+const val APP_UPDATE_LINE_DEV = "dev"
+
+val APP_UPDATE_STABILITY_OPTIONS = listOf(
+    APP_UPDATE_STABILITY_STABLE,
+    APP_UPDATE_STABILITY_UNSTABLE,
+)
+
+val APP_UPDATE_LINE_OPTIONS = listOf(
+    APP_UPDATE_LINE_NORMAL,
+    APP_UPDATE_LINE_DEV,
+)
+
+data class AppUpdateMetadata(
+    val stable: AppUpdateChannelEntries = AppUpdateChannelEntries(),
+    val unstable: AppUpdateChannelEntries = AppUpdateChannelEntries()
+) {
+    fun entryFor(stability: String, line: String): AppUpdateEntry? {
+        val normalizedStability = normalizeAppUpdateStability(stability)
+        val normalizedLine = normalizeAppUpdateLine(line)
+        val channel = when (normalizedStability) {
+            APP_UPDATE_STABILITY_UNSTABLE -> unstable
+            else -> stable
+        }
+        return when (normalizedLine) {
+            APP_UPDATE_LINE_DEV -> channel.dev
+            else -> channel.normal
+        }
+    }
+}
+
+data class AppUpdateChannelEntries(
+    val normal: AppUpdateEntry? = null,
+    val dev: AppUpdateEntry? = null
+)
+
+data class AppUpdateEntry(
+    val versionName: String = "",
+    val versionCode: Long = 0L,
+    val downloadUrl: String = "",
+    val publishedAt: String = "",
+    val buildTimestampEpochMillis: Long = 0L,
+    val sourceWorkflow: String = "",
+    val commitSha: String = "",
+    val runId: Long = 0L
+)
+
+data class AppUpdateCheckResult(
+    val stability: String,
+    val line: String,
+    val currentVersionName: String,
+    val currentVersionCode: Long,
+    val currentBuildTimestampEpochMillis: Long,
+    val remote: AppUpdateEntry,
+    val hasUpdate: Boolean
+)
+
+fun normalizeAppUpdateStability(value: String): String = when (value.trim().lowercase()) {
+    APP_UPDATE_STABILITY_UNSTABLE -> APP_UPDATE_STABILITY_UNSTABLE
+    else -> APP_UPDATE_STABILITY_STABLE
+}
+
+fun normalizeAppUpdateLine(value: String): String = when (value.trim().lowercase()) {
+    APP_UPDATE_LINE_DEV -> APP_UPDATE_LINE_DEV
+    else -> APP_UPDATE_LINE_NORMAL
+}
+
+fun shouldOfferAppUpdate(
+    remote: AppUpdateEntry,
+    currentVersionCode: Long,
+    currentBuildTimestampEpochMillis: Long
+): Boolean = when {
+    remote.versionCode > currentVersionCode -> true
+    remote.versionCode < currentVersionCode -> false
+    remote.buildTimestampEpochMillis > currentBuildTimestampEpochMillis -> true
+    else -> false
+}
+
 // GitHub Device Flow OAuth
 data class DeviceCodeResponse(
     @SerializedName("device_code") val deviceCode: String,
@@ -577,6 +657,8 @@ data class BuildQueueItem(
     val config: KernelBuildConfig = KernelBuildConfig(),
     val createdAt: Long = 0L,
     val status: BuildQueueItemStatus = BuildQueueItemStatus.PENDING,
+    /** GitHub workflow id for the dispatched YAML; used to link runs without stealing another slot. */
+    val workflowId: Long = 0L,
     val runId: Long = 0L,
     val runNumber: Int = 0,
     val error: String? = null
@@ -611,6 +693,8 @@ data class DownloadedArtifact(
     val runId: Long = -1L,
     val runTitle: String = "",
     val runNumber: Int = 0,
+    val sourceAssetId: Long = 0L,
+    val sourceAssetName: String? = null,
     val category: ArtifactCategory = type.toArtifactCategory()
 )
 
@@ -620,6 +704,7 @@ enum class ArtifactType {
     KERNEL_PACKAGE,
     KERNEL_IMG,
     ANYKERNEL3,
+    ABK_MANAGER,
     KSU_MANAGER,
     SUSFS_MODULE,
     OTHER
@@ -635,6 +720,7 @@ fun ArtifactType.toArtifactCategory(): ArtifactCategory = when (this) {
     ArtifactType.KERNEL_PACKAGE,
     ArtifactType.KERNEL_IMG,
     ArtifactType.ANYKERNEL3 -> ArtifactCategory.KERNEL
+    ArtifactType.ABK_MANAGER,
     ArtifactType.KSU_MANAGER -> ArtifactCategory.MANAGER
     ArtifactType.SUSFS_MODULE -> ArtifactCategory.MODULE
     ArtifactType.OTHER -> ArtifactCategory.MODULE
@@ -643,3 +729,107 @@ fun ArtifactType.toArtifactCategory(): ArtifactCategory = when (this) {
 enum class BuildStatus {
     IDLE, QUEUED, IN_PROGRESS, SUCCESS, FAILURE, CANCELLED
 }
+
+/** Completed run with `conclusion == failure` (Flash failed-card list). */
+fun WorkflowRun.isFailedFlashRun(): Boolean =
+    status == "completed" && conclusion == "failure"
+
+/**
+ * Kernel build vs manager build (KSU Manager, Build ABK App, etc.).
+ * Uses workflow [name] first — [displayTitle] can mention the wrong build type.
+ * Status "Last build" tile uses this to ignore manager runs.
+ */
+fun WorkflowRun.isKernelBuild(): Boolean {
+    val workflowName = name.orEmpty().lowercase()
+    val lower = "${name.orEmpty()} ${displayTitle.orEmpty()}".lowercase()
+    if (lower.hasUtilityWorkflowSignal()) return false
+    // The workflow name is more reliable than displayTitle, which can contain
+    // user/commit text from a different build type.
+    if (workflowName.hasManagerBuildSignal()) return false
+    if (workflowName.hasKernelBuildSignal()) return true
+    // Negative signals: app / manager / certificate / utility workflows.
+    if (lower.hasManagerBuildSignal()) return false
+    // Positive signals: kernel build.
+    if (lower.hasKernelBuildSignal()) return true
+    // Unknown — be conservative and exclude it from the kernel-only tile.
+    return false
+}
+
+/**
+ * Heuristic check whether this workflow run is a manager-app build (KSU
+ * Manager / SukiSU Manager / Build ABK App). Symmetric to [isKernelBuild];
+ * a single run is either kernel-like or manager-like, never both — kernel
+ * runs that bundle a manager APK are still classified as kernel.
+ */
+fun WorkflowRun.isManagerBuild(): Boolean {
+    val workflowName = name.orEmpty().lowercase()
+    val lower = "${name.orEmpty()} ${displayTitle.orEmpty()}".lowercase()
+    if (lower.hasUtilityWorkflowSignal()) return false
+    // The GitHub run display title can contain kernel parameters from the
+    // triggering commit/title. The workflow name is the primary classifier.
+    if (workflowName.hasManagerBuildSignal()) return true
+    if (workflowName.hasKernelBuildSignal()) return false
+    // Kernel workflows often bundle a manager APK but are not manager-primary.
+    if (lower.hasKernelBuildSignal()) return false
+    return lower.hasManagerBuildSignal()
+}
+
+/** Manager-primary workflow (Build ABK App / Dev), not a kernel build that bundles a manager APK. */
+fun WorkflowRun.isPureManagerBuild(): Boolean =
+    isManagerBuild() && !isKernelBuild()
+
+/** ABK app workflow only (Build ABK App / Build ABK App Dev). */
+fun WorkflowRun.isAbkManagerBuild(): Boolean {
+    val workflowName = name.orEmpty().lowercase()
+    val lower = "${name.orEmpty()} ${displayTitle.orEmpty()}".lowercase()
+    if (lower.hasUtilityWorkflowSignal()) return false
+    if (workflowName.hasAbkManagerBuildSignal()) return true
+    if (workflowName.hasKernelBuildSignal()) return false
+    if (lower.hasKernelBuildSignal()) return false
+    return lower.hasAbkManagerBuildSignal()
+}
+
+/**
+ * Dev manager workflow (e.g. Build ABK App Dev). Uses workflow [name] only — not
+ * [WorkflowRun.displayTitle]. Avoids bare `"dev" in text` so "device" does not match.
+ */
+fun WorkflowRun.isManagerDevBuild(): Boolean =
+    workflowNameIndicatesManagerDev(name.orEmpty())
+
+/** Same rules as [WorkflowRun.isManagerDevBuild] for artifact [runTitle] when [WorkflowRun] is missing. */
+fun workflowNameIndicatesManagerDev(workflowName: String): Boolean {
+    val n = workflowName.lowercase().trim()
+    if (n.isBlank()) return false
+    if (MANAGER_DEV_WORKFLOW_NAME_MARKERS.any { it in n }) return true
+    return MANAGER_DEV_NAME_TOKEN.containsMatchIn(n)
+}
+
+private val MANAGER_DEV_WORKFLOW_NAME_MARKERS = listOf(
+    "abk app dev",
+    "abk-app-dev",
+    "build abk app dev",
+    "build-app-dev",
+    "build app dev"
+)
+
+private val MANAGER_DEV_NAME_TOKEN =
+    Regex("""(^|[\s_.-])dev($|[\s_.-]|\.apk)""", RegexOption.IGNORE_CASE)
+
+private fun String.hasAbkManagerBuildSignal(): Boolean =
+    "abk app" in this || "abk-app" in this ||
+        "build abk app" in this
+
+private fun String.hasManagerBuildSignal(): Boolean =
+    hasAbkManagerBuildSignal() ||
+        "build app" in this || "build-app" in this ||
+        "debug apk" in this ||
+        "manager" in this || "ksu manager" in this || "sukisu manager" in this ||
+        "getmanager" in this || "get manager" in this ||
+        "管理器" in this
+
+private fun String.hasKernelBuildSignal(): Boolean =
+    "kernel" in this || "内核" in this
+
+private fun String.hasUtilityWorkflowSignal(): Boolean =
+    "certificate" in this || "证书" in this ||
+        "emergency" in this || "auto trigger" in this

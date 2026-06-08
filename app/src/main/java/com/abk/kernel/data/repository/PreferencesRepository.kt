@@ -4,9 +4,16 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.abk.kernel.data.model.APP_UPDATE_LINE_NORMAL
+import com.abk.kernel.data.model.APP_UPDATE_STABILITY_STABLE
+import com.abk.kernel.data.model.normalizeAppUpdateLine
+import com.abk.kernel.data.model.normalizeAppUpdateStability
 import com.abk.kernel.utils.DownloadDirectoryUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runBlocking
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "abk_prefs")
 
@@ -21,6 +28,11 @@ class PreferencesRepository(private val context: Context) {
         val KEY_FORK_REPO_NAME = stringPreferencesKey("fork_repo_name")
         val KEY_AUTO_DOWNLOAD = booleanPreferencesKey("auto_download")
         val KEY_NOTIFY_BUILD = booleanPreferencesKey("notify_build")
+        val KEY_WORKFLOW_FOREGROUND_REFRESH_ENABLED = booleanPreferencesKey("workflow_foreground_refresh_enabled")
+        val KEY_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC = intPreferencesKey("workflow_foreground_refresh_interval_sec")
+        const val DEFAULT_WORKFLOW_FOREGROUND_REFRESH_ENABLED = true
+        const val DEFAULT_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC = 20
+        val WORKFLOW_FOREGROUND_REFRESH_INTERVALS_SEC = setOf(10, 20, 30)
         val KEY_LAST_RUN_ID = longPreferencesKey("last_run_id")
         val KEY_THEME = stringPreferencesKey("theme_mode") // "system" | "light" | "dark"
         val KEY_DYNAMIC_COLOR_ENABLED = booleanPreferencesKey("dynamic_color_enabled")
@@ -43,10 +55,13 @@ class PreferencesRepository(private val context: Context) {
         val KEY_DOWNLOAD_MIRROR_BASE_URL = stringPreferencesKey("download_mirror_base_url")
         val KEY_DOWNLOAD_DIRECTORY = stringPreferencesKey("download_directory")
         val KEY_PREBUILT_GKI_ENABLED = booleanPreferencesKey("prebuilt_gki_enabled")
+        val KEY_APP_UPDATE_STABILITY = stringPreferencesKey("app_update_stability")
+        val KEY_APP_UPDATE_LINE = stringPreferencesKey("app_update_line")
         val KEY_PREDICTIVE_BACK_ENABLED = booleanPreferencesKey("predictive_back_enabled")
         val KEY_RUNTIME_NAVIGATION_ENABLED = booleanPreferencesKey("runtime_navigation_enabled")
         val KEY_WEBVIEW_DEBUG_ENABLED = booleanPreferencesKey("webview_debug_enabled")
         val KEY_TERMS_ACCEPTED_VERSION = intPreferencesKey("terms_accepted_version")
+        val KEY_FLASH_FILTER = stringPreferencesKey("flash_filter_json")
         val KEY_OOBE_COMPLETED = booleanPreferencesKey("oobe_completed")
     }
 
@@ -56,6 +71,14 @@ class PreferencesRepository(private val context: Context) {
     val forkRepoName: Flow<String?> = context.dataStore.data.map { it[KEY_FORK_REPO_NAME] }
     val autoDownload: Flow<Boolean> = context.dataStore.data.map { it[KEY_AUTO_DOWNLOAD] ?: true }
     val notifyBuild: Flow<Boolean> = context.dataStore.data.map { it[KEY_NOTIFY_BUILD] ?: true }
+    val workflowForegroundRefreshEnabled: Flow<Boolean> = context.dataStore.data.map {
+        it[KEY_WORKFLOW_FOREGROUND_REFRESH_ENABLED] ?: DEFAULT_WORKFLOW_FOREGROUND_REFRESH_ENABLED
+    }
+    val workflowForegroundRefreshIntervalSec: Flow<Int> = context.dataStore.data.map { preferences ->
+        normalizeWorkflowForegroundRefreshIntervalSec(
+            preferences[KEY_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC]
+        )
+    }
     val lastRunId: Flow<Long> = context.dataStore.data.map { it[KEY_LAST_RUN_ID] ?: -1L }
     val themeMode: Flow<String> = context.dataStore.data.map { it[KEY_THEME] ?: "dark" }
     val dynamicColorEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_DYNAMIC_COLOR_ENABLED] ?: true }
@@ -82,6 +105,12 @@ class PreferencesRepository(private val context: Context) {
         DownloadDirectoryUtils.normalizeDirectoryPath(it[KEY_DOWNLOAD_DIRECTORY])
     }
     val prebuiltGkiEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_PREBUILT_GKI_ENABLED] ?: true }
+    val appUpdateStability: Flow<String> = context.dataStore.data.map {
+        normalizeAppUpdateStability(it[KEY_APP_UPDATE_STABILITY] ?: APP_UPDATE_STABILITY_STABLE)
+    }
+    val appUpdateLine: Flow<String> = context.dataStore.data.map {
+        normalizeAppUpdateLine(it[KEY_APP_UPDATE_LINE] ?: APP_UPDATE_LINE_NORMAL)
+    }
     val predictiveBackEnabled: Flow<Boolean> = context.dataStore.data.map { it[KEY_PREDICTIVE_BACK_ENABLED] ?: true }
     val runtimeNavigationEnabled: Flow<Boolean> = context.dataStore.data.map {
         it[KEY_RUNTIME_NAVIGATION_ENABLED] ?: false
@@ -89,7 +118,16 @@ class PreferencesRepository(private val context: Context) {
     val webViewDebugEnabled: Flow<Boolean> = context.dataStore.data.map {
         it[KEY_WEBVIEW_DEBUG_ENABLED] ?: false
     }
+
+    /** Blocking read for non-Compose entry points; never call from the main thread. */
+    fun readWebViewDebugEnabledBlocking(): Boolean = runCatching {
+        runBlocking(Dispatchers.IO) {
+            context.dataStore.data.first()[KEY_WEBVIEW_DEBUG_ENABLED] ?: false
+        }
+    }.getOrDefault(false)
+
     val termsAcceptedVersion: Flow<Int> = context.dataStore.data.map { it[KEY_TERMS_ACCEPTED_VERSION] ?: 0 }
+    val flashFilterJson: Flow<String?> = context.dataStore.data.map { it[KEY_FLASH_FILTER] }
     val oobeCompleted: Flow<Boolean> = context.dataStore.data.map { it[KEY_OOBE_COMPLETED] ?: false }
 
     suspend fun saveToken(token: String) = context.dataStore.edit { it[KEY_ACCESS_TOKEN] = token }
@@ -98,6 +136,21 @@ class PreferencesRepository(private val context: Context) {
     suspend fun saveForkRepoName(name: String) = context.dataStore.edit { it[KEY_FORK_REPO_NAME] = name }
     suspend fun setAutoDownload(v: Boolean) = context.dataStore.edit { it[KEY_AUTO_DOWNLOAD] = v }
     suspend fun setNotifyBuild(v: Boolean) = context.dataStore.edit { it[KEY_NOTIFY_BUILD] = v }
+    suspend fun setWorkflowForegroundRefreshEnabled(v: Boolean) = context.dataStore.edit {
+        it[KEY_WORKFLOW_FOREGROUND_REFRESH_ENABLED] = v
+    }
+    suspend fun setWorkflowForegroundRefreshIntervalSec(seconds: Int) = context.dataStore.edit {
+        it[KEY_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC] = normalizeWorkflowForegroundRefreshIntervalSec(seconds)
+    }
+
+    private fun normalizeWorkflowForegroundRefreshIntervalSec(raw: Int?): Int {
+        val value = raw ?: DEFAULT_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC
+        return if (value in WORKFLOW_FOREGROUND_REFRESH_INTERVALS_SEC) {
+            value
+        } else {
+            DEFAULT_WORKFLOW_FOREGROUND_REFRESH_INTERVAL_SEC
+        }
+    }
     suspend fun saveLastRunId(id: Long) = context.dataStore.edit { it[KEY_LAST_RUN_ID] = id }
     suspend fun setThemeMode(mode: String) = context.dataStore.edit { it[KEY_THEME] = mode }
     suspend fun setDynamicColorEnabled(
@@ -156,6 +209,12 @@ class PreferencesRepository(private val context: Context) {
         }
     }
     suspend fun setPrebuiltGkiEnabled(v: Boolean) = context.dataStore.edit { it[KEY_PREBUILT_GKI_ENABLED] = v }
+    suspend fun setAppUpdateStability(value: String) = context.dataStore.edit {
+        it[KEY_APP_UPDATE_STABILITY] = normalizeAppUpdateStability(value)
+    }
+    suspend fun setAppUpdateLine(value: String) = context.dataStore.edit {
+        it[KEY_APP_UPDATE_LINE] = normalizeAppUpdateLine(value)
+    }
     suspend fun setPredictiveBackEnabled(v: Boolean) = context.dataStore.edit { it[KEY_PREDICTIVE_BACK_ENABLED] = v }
     suspend fun setRuntimeNavigationEnabled(v: Boolean) = context.dataStore.edit {
         it[KEY_RUNTIME_NAVIGATION_ENABLED] = v
@@ -166,10 +225,22 @@ class PreferencesRepository(private val context: Context) {
     suspend fun acceptCurrentTerms() = context.dataStore.edit {
         it[KEY_TERMS_ACCEPTED_VERSION] = CURRENT_TERMS_VERSION
     }
+    suspend fun saveFlashFilterJson(json: String) = context.dataStore.edit { it[KEY_FLASH_FILTER] = json }
     suspend fun setOobeCompleted(v: Boolean) = context.dataStore.edit {
         it[KEY_OOBE_COMPLETED] = v
     }
     suspend fun clearPendingAutoDownloadRunId() = context.dataStore.edit { it.remove(KEY_PENDING_AUTO_DOWNLOAD_RUN_ID) }
+
+    private fun workflowStepsVersionKey(lang: String) = intPreferencesKey("workflow_steps_version_$lang")
+
+    suspend fun getWorkflowStepsVersion(lang: String): Int {
+        val key = workflowStepsVersionKey(lang)
+        return context.dataStore.data.map { it[key] ?: 0 }.first()
+    }
+
+    suspend fun setWorkflowStepsVersion(lang: String, version: Int) = context.dataStore.edit {
+        it[workflowStepsVersionKey(lang)] = version
+    }
 
     suspend fun clearAuth() = context.dataStore.edit {
         it.remove(KEY_ACCESS_TOKEN)

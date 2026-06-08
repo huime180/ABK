@@ -25,7 +25,7 @@ sealed class Result<out T> {
     object Loading : Result<Nothing>()
 }
 
-class GitHubRepository(
+open class GitHubRepository(
     private val authService: GitHubAuthService = NetworkClient.createAuthService(),
     private var apiService: GitHubApiService = NetworkClient.createApiService()
 ) {
@@ -41,7 +41,7 @@ class GitHubRepository(
 
     // ── Auth ──────────────────────────────────────────────────────────────
 
-    suspend fun requestDeviceCode(): Result<DeviceCodeResponse> = runCatching {
+    open suspend fun requestDeviceCode(): Result<DeviceCodeResponse> = runCatching {
         val resp = authService.requestDeviceCode(clientId)
         if (resp.isSuccessful && resp.body() != null) {
             Result.Success(resp.body()!!)
@@ -50,7 +50,7 @@ class GitHubRepository(
         }
     }.getOrElse { Result.Error(it.message ?: "Unknown error") }
 
-    suspend fun pollToken(deviceCode: String): Result<AccessTokenResponse> = runCatching {
+    open suspend fun pollToken(deviceCode: String): Result<AccessTokenResponse> = runCatching {
         val resp = authService.pollAccessToken(clientId, deviceCode)
         if (resp.isSuccessful && resp.body() != null) {
             Result.Success(resp.body()!!)
@@ -190,6 +190,36 @@ class GitHubRepository(
             Result.Error(tr(R.string.gh_catalog_json_unreadable, lastError))
         }
 
+    suspend fun fetchAppUpdateMetadata(
+        metadataUrl: String = BuildConfig.APP_UPDATE_METADATA_URL
+    ): Result<AppUpdateMetadata> = withContext(Dispatchers.IO) {
+        val url = metadataUrl.trim()
+        if (url.isBlank()) {
+            return@withContext Result.Error("App update metadata URL is empty")
+        }
+
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json,text/plain,*/*")
+            .build()
+
+        val response = runCatching { publicHttpClient.newCall(request).execute() }
+            .getOrElse { return@withContext Result.Error(it.message ?: tr(R.string.gh_network_request_failed)) }
+
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                return@withContext Result.Error("HTTP ${resp.code}")
+            }
+
+            val body = resp.body?.string().orEmpty()
+            return@withContext runCatching { parseAppUpdateMetadata(body) }
+                .fold(
+                    onSuccess = { Result.Success(it) },
+                    onFailure = { Result.Error(it.message ?: tr(R.string.gh_format_error)) }
+                )
+        }
+    }
+
     // ── User ──────────────────────────────────────────────────────────────
 
     suspend fun getAuthenticatedUser(): Result<GitHubUser> {
@@ -203,7 +233,7 @@ class GitHubRepository(
 
     // ── Fork ──────────────────────────────────────────────────────────────
 
-    suspend fun getUserFork(sourceOwner: String, sourceRepo: String, username: String): Result<GitHubRepo?> {
+    open suspend fun getUserFork(sourceOwner: String, sourceRepo: String, username: String): Result<GitHubRepo?> {
         val api = apiService
         return runCatching {
             val resp = api.getRepo(username, sourceRepo)
@@ -219,7 +249,7 @@ class GitHubRepository(
         }.getOrElse { Result.Error(it.message ?: "Unknown error") }
     }
 
-    suspend fun forkRepo(owner: String, repo: String): Result<GitHubRepo> {
+    open suspend fun forkRepo(owner: String, repo: String): Result<GitHubRepo> {
         val api = apiService
         return runCatching {
             val resp = api.forkRepo(owner, repo)
@@ -228,7 +258,7 @@ class GitHubRepository(
         }.getOrElse { Result.Error(it.message ?: "Unknown error") }
     }
 
-    suspend fun checkBehind(
+    open suspend fun checkBehind(
         sourceOwner: String,
         sourceRepo: String,
         baseBranch: String,
@@ -598,6 +628,43 @@ class GitHubRepository(
         )
     }
 
+    internal fun parseAppUpdateMetadata(body: String): AppUpdateMetadata {
+        val root = JsonParser.parseString(body)
+        val document = root.asJsonObjectOrNull() ?: error(tr(R.string.gh_root_must_be_object))
+        return AppUpdateMetadata(
+            stable = parseAppUpdateChannelEntries(document.objectOrNull("stable")),
+            unstable = parseAppUpdateChannelEntries(document.objectOrNull("unstable"))
+        )
+    }
+
+    private fun parseAppUpdateChannelEntries(raw: JsonObject?): AppUpdateChannelEntries =
+        AppUpdateChannelEntries(
+            normal = raw?.objectOrNull("normal")?.let(::sanitizeAppUpdateEntry),
+            dev = raw?.objectOrNull("dev")?.let(::sanitizeAppUpdateEntry)
+        )
+
+    private fun sanitizeAppUpdateEntry(raw: JsonObject): AppUpdateEntry? {
+        val versionCode = raw.longOrZero("versionCode")
+            .takeIf { it > 0L }
+            ?: raw.longOrZero("version_code").takeIf { it > 0L }
+            ?: return null
+        val versionName = raw.stringOrEmpty("versionName")
+            .ifBlank { raw.stringOrEmpty("version_name") }
+            .ifBlank { versionCode.toString() }
+        return AppUpdateEntry(
+            versionName = versionName,
+            versionCode = versionCode,
+            downloadUrl = raw.stringOrEmpty("downloadUrl").ifBlank { raw.stringOrEmpty("download_url") },
+            publishedAt = raw.stringOrEmpty("publishedAt").ifBlank { raw.stringOrEmpty("published_at") },
+            buildTimestampEpochMillis = raw.longOrZero("buildTimestampEpochMillis")
+                .takeIf { it > 0L }
+                ?: raw.longOrZero("build_timestamp_epoch_millis"),
+            sourceWorkflow = raw.stringOrEmpty("sourceWorkflow").ifBlank { raw.stringOrEmpty("source_workflow") },
+            commitSha = raw.stringOrEmpty("commitSha").ifBlank { raw.stringOrEmpty("commit_sha") },
+            runId = raw.longOrZero("runId").takeIf { it > 0L } ?: raw.longOrZero("run_id")
+        )
+    }
+
     private fun sanitizeCatalogItem(raw: JsonObject): ModuleCatalogItem? {
         val repoUrl = raw.stringOrEmpty("repoUrl")
         if (repoUrl.isBlank()) return null
@@ -724,6 +791,9 @@ class GitHubRepository(
 
     private fun JsonElement.asJsonObjectOrNull(): JsonObject? =
         takeIf { it.isJsonObject }?.asJsonObject
+
+    private fun JsonObject.objectOrNull(name: String): JsonObject? =
+        get(name)?.asJsonObjectOrNull()
 
     private fun JsonObject.stringOrEmpty(name: String): String =
         get(name)

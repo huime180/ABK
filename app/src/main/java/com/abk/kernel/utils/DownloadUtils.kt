@@ -3,6 +3,7 @@ package com.abk.kernel.utils
 import android.content.Context
 import com.abk.kernel.BuildConfig
 import com.abk.kernel.R
+import com.abk.kernel.data.model.APP_UPDATE_LINE_DEV
 import com.abk.kernel.data.model.Artifact
 import com.abk.kernel.data.model.ArtifactCategory
 import com.abk.kernel.data.model.ArtifactType
@@ -11,6 +12,7 @@ import com.abk.kernel.data.model.DownloadedArtifact
 import com.abk.kernel.data.model.PREBUILT_GKI_RUN_ID
 import com.abk.kernel.data.model.PrebuiltGkiAsset
 import com.abk.kernel.data.model.WorkflowRun
+import com.abk.kernel.data.model.normalizeAppUpdateLine
 import com.abk.kernel.data.model.toArtifact
 import com.abk.kernel.data.model.toArtifactCategory
 import kotlinx.coroutines.CancellationException
@@ -36,6 +38,11 @@ object DownloadUtils {
     private const val LICENSE_FILE_NAME = "LICENSE"
     private const val THIRD_PARTY_NOTICES_FILE_NAME = "THIRD_PARTY_NOTICES.md"
     private const val BUNDLE_MANIFEST_FILE_NAME = "ABK_BUNDLE_MANIFEST.txt"
+    private const val NOTICE_STAGING_DIR_NAME = "__abk_notices"
+
+    internal fun isBundledNoticeFileName(fileName: String): Boolean =
+        fileName.equals(LICENSE_FILE_NAME, ignoreCase = true) ||
+            fileName.equals(THIRD_PARTY_NOTICES_FILE_NAME, ignoreCase = true)
 
     data class DownloadResult(
         val artifacts: List<DownloadedArtifact> = emptyList(),
@@ -45,6 +52,11 @@ object DownloadUtils {
     data class PreparedDownloadedArtifact(
         val file: File,
         val cleanupDir: File? = null
+    )
+
+    data class AppUpdatePackageResult(
+        val apkFile: File? = null,
+        val errorMessage: String? = null
     )
 
     private data class NoticeFiles(
@@ -68,6 +80,12 @@ object DownloadUtils {
             lower.contains("anykernel") || lower.contains("ak3") -> ArtifactType.ANYKERNEL3
             lower.endsWith(".zip") && isLikelyModuleZipName(lower) -> ArtifactType.SUSFS_MODULE
             isLikelyModuleZipName(lower) && !lower.contains("anykernel") -> ArtifactType.SUSFS_MODULE
+            // Build ABK App workflows upload a single artifact bundle named
+            // "abk-apks" that contains the debug/release APK files. Keep the
+            // dedicated type so legacy persisted downloads still parse cleanly,
+            // while flash-specific UI can filter it out.
+            lower == "abk-apks" || lower.contains("abk-apks") -> ArtifactType.ABK_MANAGER
+            lower.contains("abk") && lower.endsWith(".apk") -> ArtifactType.ABK_MANAGER
             lower.endsWith(".apk") && (
                 lower.contains("manager") ||
                     lower.contains("kernelsu") ||
@@ -95,6 +113,7 @@ object DownloadUtils {
         ArtifactType.KERNEL_PACKAGE,
         ArtifactType.KERNEL_IMG,
         ArtifactType.ANYKERNEL3 -> ArtifactCategory.KERNEL
+        ArtifactType.ABK_MANAGER,
         ArtifactType.KSU_MANAGER -> ArtifactCategory.MANAGER
         ArtifactType.SUSFS_MODULE -> ArtifactCategory.MODULE
         ArtifactType.OTHER -> null
@@ -103,11 +122,14 @@ object DownloadUtils {
     fun shouldAutoDownload(artifact: Artifact): Boolean {
         val lower = artifact.name.lowercase()
         val type = classifyArtifact(artifact.name)
-        return when (classifyCategory(type)) {
+        return when (type) {
+            ArtifactType.ABK_MANAGER -> false
+            else -> when (classifyCategory(type)) {
             ArtifactCategory.KERNEL,
             ArtifactCategory.MODULE -> true
             ArtifactCategory.MANAGER -> isLikelySupportedManager(lower)
             null -> false
+            }
         }
     }
 
@@ -118,8 +140,11 @@ object DownloadUtils {
             downloaded.filePath.contains("/${artifactStorageFolderName(artifact.name)}/")
 
     fun matchesDownloadedPrebuilt(downloaded: DownloadedArtifact, asset: PrebuiltGkiAsset): Boolean =
-        downloaded.runId == PREBUILT_GKI_RUN_ID &&
-            downloaded.filePath.contains("/prebuilt-gki/${artifactStorageFolderName(asset.name)}/")
+        downloaded.runId == PREBUILT_GKI_RUN_ID && (
+            (downloaded.sourceAssetId > 0L && downloaded.sourceAssetId == asset.id) ||
+                downloaded.sourceAssetName?.trim() == asset.name ||
+                downloaded.filePath.contains("/prebuilt-gki/${artifactStorageFolderName(asset.name)}/")
+        )
 
     fun artifactStorageFolderName(name: String): String = safeFileName(name)
 
@@ -175,8 +200,15 @@ object DownloadUtils {
             }
             try {
                 call.execute().use { handled ->
-                    if (!handled.isSuccessful) return@withContext DownloadResult()
-                    val body = handled.body ?: return@withContext DownloadResult()
+                    if (!handled.isSuccessful) {
+                        return@withContext DownloadResult(
+                            errorMessage = downloadHttpErrorMessage(context, handled.code)
+                        )
+                    }
+                    val body = handled.body
+                        ?: return@withContext DownloadResult(
+                            errorMessage = context.getString(R.string.download_empty_response)
+                        )
                     val totalBytes = artifact.sizeInBytes.coerceAtLeast(1L)
 
                     val targetRunDir = File(downloadsRoot, runFolderName(run)).apply { mkdirs() }
@@ -261,6 +293,7 @@ object DownloadUtils {
                         runTitle = run?.displayTitle ?: run?.name ?: run?.let { "#${it.runNumber}" }
                             ?: context.getString(R.string.workflow_unlinked),
                         runNumber = run?.runNumber ?: 0,
+                        sourceAssetName = artifact.name,
                         category = entry.type.toArtifactCategory()
                     )
                 }
@@ -280,7 +313,7 @@ object DownloadUtils {
             zipFile?.delete()
             stageDir?.deleteRecursively()
             outDir?.deleteRecursively()
-            DownloadResult()
+            DownloadResult(errorMessage = downloadExceptionMessage(context, e))
         }
     }
 
@@ -292,6 +325,7 @@ object DownloadUtils {
         sizeBytes: Long,
         runId: Long,
         runTitle: String,
+        sourceAssetId: Long = 0L,
         downloadDirectoryPath: String? = null,
         bundleWithNotices: Boolean = false,
         onProgress: (Int) -> Unit = {}
@@ -323,8 +357,15 @@ object DownloadUtils {
             }
             try {
                 call.execute().use { handled ->
-                    if (!handled.isSuccessful) return@withContext DownloadResult()
-                    val body = handled.body ?: return@withContext DownloadResult()
+                    if (!handled.isSuccessful) {
+                        return@withContext DownloadResult(
+                            errorMessage = downloadHttpErrorMessage(context, handled.code)
+                        )
+                    }
+                    val body = handled.body
+                        ?: return@withContext DownloadResult(
+                            errorMessage = context.getString(R.string.download_empty_response)
+                        )
                     val totalBytes = when {
                         sizeBytes > 0L -> sizeBytes
                         body.contentLength() > 0L -> body.contentLength()
@@ -357,10 +398,9 @@ object DownloadUtils {
             val records = if (bundleWithNotices) {
                 if (looksLikeNoticeBundle(downloadedFile)) {
                     listOf(
-                        LocalDownloadEntry(
-                            displayName = normalizedArtifactName(downloadedFile.name),
-                            file = downloadedFile,
-                            type = classifyDownloadedFile(downloadedFile)
+                        persistBundledDownloadEntry(
+                            bundleRootDir = requireNotNull(assetDir),
+                            downloadedFile = downloadedFile
                         )
                     )
                 } else {
@@ -430,6 +470,8 @@ object DownloadUtils {
                         runId = runId,
                         runTitle = runTitle,
                         runNumber = 0,
+                        sourceAssetId = sourceAssetId,
+                        sourceAssetName = name,
                         category = entry.type.toArtifactCategory()
                     )
                 }
@@ -450,7 +492,87 @@ object DownloadUtils {
             stageDir?.deleteRecursively()
             outDir?.deleteRecursively()
             assetDir?.takeIf { bundleWithNotices }?.deleteRecursively()
-            DownloadResult()
+            DownloadResult(errorMessage = downloadExceptionMessage(context, e))
+        }
+    }
+
+    suspend fun downloadAppUpdatePackage(
+        context: Context,
+        token: String?,
+        url: String,
+        preferredLine: String,
+        onProgress: (Int) -> Unit = {}
+    ): AppUpdatePackageResult = withContext(Dispatchers.IO) {
+        var stageDir: File? = null
+        try {
+            stageDir = File(context.cacheDir, "app-update").apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            val fileName = safeFileName(url.substringAfterLast('/').ifBlank { "app-update.zip" })
+            val archive = File(stageDir, fileName)
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/octet-stream")
+                .apply {
+                    if (!token.isNullOrBlank()) {
+                        header("Authorization", "Bearer $token")
+                    }
+                }
+                .build()
+
+            val call = client.newCall(request)
+            val cancellationHandle = coroutineContext.job.invokeOnCompletion { cause ->
+                if (cause is CancellationException) {
+                    call.cancel()
+                }
+            }
+            try {
+                call.execute().use { handled ->
+                    if (!handled.isSuccessful) {
+                        return@withContext AppUpdatePackageResult(
+                            errorMessage = downloadHttpErrorMessage(context, handled.code)
+                        )
+                    }
+                    val body = handled.body
+                        ?: return@withContext AppUpdatePackageResult(
+                            errorMessage = context.getString(R.string.download_empty_response)
+                        )
+                    writeStreamToFile(
+                        input = body.byteStream(),
+                        destination = archive,
+                        totalBytes = body.contentLength().coerceAtLeast(1L),
+                        onProgress = onProgress
+                    )
+                }
+            } finally {
+                cancellationHandle.dispose()
+            }
+
+            val apkFile = if (archive.extension.equals("apk", ignoreCase = true)) {
+                archive
+            } else {
+                val extractedDir = File(stageDir, "extracted").apply {
+                    deleteRecursively()
+                    mkdirs()
+                }
+                unzip(archive, extractedDir)
+                selectAppUpdateApk(collectCandidateFiles(extractedDir), preferredLine)
+            }
+
+            if (apkFile == null || !apkFile.isFile) {
+                return@withContext AppUpdatePackageResult(
+                    errorMessage = context.getString(R.string.vm_app_update_apk_missing)
+                )
+            }
+            AppUpdatePackageResult(apkFile = apkFile)
+        } catch (e: CancellationException) {
+            stageDir?.deleteRecursively()
+            throw e
+        } catch (e: Exception) {
+            coroutineContext.ensureActive()
+            stageDir?.deleteRecursively()
+            AppUpdatePackageResult(errorMessage = downloadExceptionMessage(context, e))
         }
     }
 
@@ -472,7 +594,7 @@ object DownloadUtils {
                 .firstOrNull {
                     it.isFile &&
                         it.name != BUNDLE_MANIFEST_FILE_NAME &&
-                        it.name !in setOf(LICENSE_FILE_NAME, THIRD_PARTY_NOTICES_FILE_NAME)
+                        !isBundledNoticeFileName(it.name)
                 }
             ?: throw IllegalStateException("Bundled artifact missing payload: ${artifact.name}")
         return PreparedDownloadedArtifact(payload, extractDir)
@@ -530,6 +652,13 @@ object DownloadUtils {
         return directory.takeIf { it.isDirectory && it.canWrite() }
     }
 
+    private fun downloadHttpErrorMessage(context: Context, code: Int): String =
+        context.getString(R.string.download_http_failed, code)
+
+    private fun downloadExceptionMessage(context: Context, error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() }
+            ?: context.getString(R.string.download_unknown_error)
+
     private fun downloadDirectoryErrorMessage(context: Context, downloadDirectoryPath: String?): String {
         val normalizedPath = DownloadDirectoryUtils.normalizeDirectoryPath(downloadDirectoryPath)
         val directory = File(normalizedPath)
@@ -575,7 +704,7 @@ object DownloadUtils {
     private suspend fun resolveNoticeFiles(stagingRoot: File): NoticeFiles? {
         findNoticeFiles(stagingRoot)?.let { return it }
 
-        val noticeDir = File(stagingRoot, "__abk_notices").apply { mkdirs() }
+        val noticeDir = File(stagingRoot, NOTICE_STAGING_DIR_NAME).apply { mkdirs() }
         val license = File(noticeDir, LICENSE_FILE_NAME)
         val thirdParty = File(noticeDir, THIRD_PARTY_NOTICES_FILE_NAME)
         if (!license.exists() && !downloadNoticeFile(LICENSE_FILE_NAME, license)) return null
@@ -650,18 +779,46 @@ object DownloadUtils {
         }
     }
 
+    private fun persistBundledDownloadEntry(
+        bundleRootDir: File,
+        downloadedFile: File
+    ): LocalDownloadEntry {
+        val displayName = normalizedArtifactName(downloadedFile.name)
+        val dirName = safeFileName(displayName).ifBlank { "artifact-bundle" }
+        val candidateDir = File(bundleRootDir, dirName).apply {
+            if (exists()) deleteRecursively()
+            mkdirs()
+        }
+        val persistedBundle = File(candidateDir, downloadedFile.name)
+        downloadedFile.copyTo(persistedBundle, overwrite = true)
+        return LocalDownloadEntry(
+            displayName = displayName,
+            file = persistedBundle,
+            type = classifyDownloadedFile(persistedBundle)
+        )
+    }
+
     private fun createNoticeBundle(
         bundleFile: File,
         payload: File,
         notices: NoticeFiles
     ) {
         ZipOutputStream(FileOutputStream(bundleFile)).use { zip ->
+            val addedEntryNames = mutableSetOf<String>()
+            fun addUniqueEntry(file: File, entryName: String) {
+                val key = entryName.lowercase(Locale.ROOT)
+                if (!addedEntryNames.add(key)) return
+                addFileToZip(zip, file, entryName)
+            }
+
             zip.putNextEntry(ZipEntry(BUNDLE_MANIFEST_FILE_NAME))
             zip.write("payload=${payload.name}\n".toByteArray(Charsets.UTF_8))
             zip.closeEntry()
-            addFileToZip(zip, payload, payload.name)
-            addFileToZip(zip, notices.license, LICENSE_FILE_NAME)
-            addFileToZip(zip, notices.thirdPartyNotices, THIRD_PARTY_NOTICES_FILE_NAME)
+            addedEntryNames.add(BUNDLE_MANIFEST_FILE_NAME.lowercase(Locale.ROOT))
+
+            addUniqueEntry(payload, payload.name)
+            addUniqueEntry(notices.license, LICENSE_FILE_NAME)
+            addUniqueEntry(notices.thirdPartyNotices, THIRD_PARTY_NOTICES_FILE_NAME)
         }
     }
 
@@ -690,9 +847,24 @@ object DownloadUtils {
             ?.trim()
             ?.ifBlank { null }
 
+    internal fun collectArtifactPayloadFiles(outDir: File): List<File> = collectCandidateFiles(outDir)
+
+    internal fun selectAppUpdateApk(candidates: List<File>, preferredLine: String): File? {
+        val preferDev = normalizeAppUpdateLine(preferredLine) == APP_UPDATE_LINE_DEV
+        return candidates
+            .filter { it.isFile && it.extension.equals("apk", ignoreCase = true) }
+            .maxWithOrNull(
+                compareBy<File> { appUpdateApkScore(it.name, preferDev) }
+                    .thenBy { it.name.length }
+            )
+    }
+
     private fun collectCandidateFiles(outDir: File): List<File> {
+        val noticeStagingRoot = File(outDir, NOTICE_STAGING_DIR_NAME).absolutePath + File.separator
         val files = outDir.walkTopDown()
             .filter { it.isFile && !it.name.startsWith(".") }
+            .filter { !isBundledNoticeFileName(it.name) }
+            .filter { !it.absolutePath.startsWith(noticeStagingRoot) }
             .toList()
 
         val candidates = files.filter { file ->
@@ -700,6 +872,7 @@ object DownloadUtils {
                 ArtifactType.KERNEL_PACKAGE,
                 ArtifactType.KERNEL_IMG,
                 ArtifactType.ANYKERNEL3,
+                ArtifactType.ABK_MANAGER,
                 ArtifactType.KSU_MANAGER,
                 ArtifactType.SUSFS_MODULE -> true
                 ArtifactType.OTHER -> false
@@ -713,12 +886,28 @@ object DownloadUtils {
                     ArtifactType.KERNEL_PACKAGE -> 0
                     ArtifactType.KERNEL_IMG -> 1
                     ArtifactType.ANYKERNEL3 -> 2
+                    ArtifactType.ABK_MANAGER,
                     ArtifactType.KSU_MANAGER -> 3
                     ArtifactType.SUSFS_MODULE -> 4
                     ArtifactType.OTHER -> 5
                 }
             }.thenBy { it.name }
         )
+    }
+
+    private fun appUpdateApkScore(name: String, preferDev: Boolean): Int {
+        val lower = name.lowercase(Locale.ROOT)
+        var score = 0
+        if ("unsigned" in lower) score -= 1000
+        if ("release" in lower) score += 100
+        if ("debug" in lower) score -= 40
+        if ("abk" in lower || "app" in lower) score += 20
+        if (preferDev) {
+            score += if ("dev" in lower) 80 else -80
+        } else {
+            score += if ("dev" in lower) -80 else 10
+        }
+        return score
     }
 
     private fun classifyDownloadedFile(file: File): ArtifactType {

@@ -10,13 +10,32 @@ import kotlin.math.roundToInt
 
 object BuildProgressUtils {
 
+    /**
+     * Per-run formatting hint for [merge]. When populated, [merge] uses a
+     * compact technical format instead of the old "Объединённый прогресс по
+     * N workflow…" wall of text:
+     *   single:   "#42 SukiSU SUSFS 6.6.89-android15-2025-06"
+     *   multiple: "#42 SukiSU SUSFS 6.6.89-… · Manager Dev"
+     *
+     * Sourced from BuildQueueItem.config in the ViewModel — runs without a
+     * descriptor fall back to the older "#N {step.name}" rendering.
+     */
+    data class RunDescriptor(
+        val isManager: Boolean = false,
+        val managerIsDev: Boolean = false,
+        val ksuVariant: String = "",
+        val susfs: Boolean = false,
+        val kernelLabel: String = ""
+    )
+
     fun from(run: WorkflowRun, jobs: List<WorkflowJob>): BuildProgress {
         val steps = jobs.flatMapIndexed { jobIndex, job ->
             val jobSteps = job.steps.orEmpty()
+            val jobName = translateWorkflowStepName(job.name)
             if (jobSteps.isEmpty()) {
                 listOf(
                     BuildStepProgress(
-                        name = job.name,
+                        name = jobName,
                         status = job.status ?: run.status,
                         conclusion = job.conclusion,
                         index = jobIndex + 1
@@ -25,7 +44,7 @@ object BuildProgressUtils {
             } else {
                 jobSteps.sortedBy { it.number }.map { step ->
                     BuildStepProgress(
-                        name = "${job.name} / ${step.name}",
+                        name = "$jobName / ${translateWorkflowStepName(step.name)}",
                         status = step.status ?: job.status ?: run.status,
                         conclusion = step.conclusion,
                         index = step.number
@@ -96,7 +115,8 @@ object BuildProgressUtils {
 
     fun merge(
         runs: List<WorkflowRun>,
-        progressByRunId: Map<Long, BuildProgress>
+        progressByRunId: Map<Long, BuildProgress>,
+        descriptors: Map<Long, RunDescriptor> = emptyMap()
     ): BuildProgress {
         val activeRuns = runs
             .filter { it.status in ACTIVE_RUN_STATUSES }
@@ -118,21 +138,13 @@ object BuildProgressUtils {
                 0
             }
         }
-        val runningCount = activeRuns.count { it.status == "in_progress" }
-        val queuedCount = activeRuns.size - runningCount
-        val detail = pairs
-            .filter { (run, _) -> run.status == "in_progress" }
-            .ifEmpty { pairs }
-            .take(2)
-            .joinToString("；") { (run, progress) ->
-                "${runDisplayLabel(run)} ${progress.currentStep}"
-            }
-        val currentStep = buildString {
-            append(tr(R.string.bp_merge_progress, activeRuns.size))
-            if (runningCount > 0) append(tr(R.string.bp_merge_running, runningCount))
-            if (queuedCount > 0) append(tr(R.string.bp_merge_queued, queuedCount))
-            if (detail.isNotBlank()) append(" · ").append(detail)
-        }
+        // Both branches use the compact "#65 SukiSU SUSFS 6.6.89-…"-style
+        // chip output. The descriptor map is normally populated from the VM
+        // (buildQueue → KernelBuildConfig); when empty (e.g. notification
+        // service in a process that lacks queue context) the helper falls
+        // back to "#N {step.name}" per run — still without the old
+        // "Объединённый прогресс по N workflow" prefix.
+        val currentStep = buildCompactMergedStep(activeRuns, pairs.toMap(), descriptors)
         val steps = pairs.flatMap { (run, progress) ->
             progress.steps.map { step ->
                 step.copy(name = "${runDisplayLabel(run)} ${step.name}")
@@ -148,8 +160,48 @@ object BuildProgressUtils {
         )
     }
 
+    /**
+     * "#42 SukiSU SUSFS 6.6.89-android15-2025-06" for one run,
+     * "2 Workflows · #42 SukiSU … · Manager Dev" for many.
+     */
+    private fun buildCompactMergedStep(
+        activeRuns: List<WorkflowRun>,
+        progressMap: Map<WorkflowRun, BuildProgress>,
+        descriptors: Map<Long, RunDescriptor>
+    ): String {
+        val entries = activeRuns.map { run ->
+            val desc = descriptors[run.id]
+            when {
+                desc?.isManager == true -> buildString {
+                    append(runDisplayLabel(run))
+                    append(' ')
+                    append(if (desc.managerIsDev) "Manager Dev" else "Manager")
+                }
+                desc != null && desc.kernelLabel.isNotBlank() -> buildString {
+                    append(runDisplayLabel(run))
+                    if (desc.ksuVariant.isNotBlank()) append(' ').append(desc.ksuVariant)
+                    if (desc.susfs) append(" SUSFS")
+                    append(' ').append(desc.kernelLabel)
+                }
+                else -> {
+                    // No descriptor — fall back to the step name but stripped of
+                    // the noisy "{job}/{step}" prefixes that the old format used.
+                    val progress = progressMap[run] ?: defaultFor(run)
+                    "${runDisplayLabel(run)} ${progress.currentStep}"
+                }
+            }
+        }
+        // Keep the same middle-dot separator the card already uses between
+        // percent and the first workflow label so multi-run rows read
+        // consistently for both kernel and manager sections.
+        return entries.joinToString(" · ")
+    }
+
     private fun runDisplayLabel(run: WorkflowRun): String =
         if (run.runNumber > 0) "#${run.runNumber}" else "#${run.id}"
 
     private val ACTIVE_RUN_STATUSES = setOf("queued", "waiting", "requested", "pending", "in_progress")
+
+    /** Upstream YAML step names are Chinese; [WorkflowStepI18n] maps them for non-zh UI. */
+    private fun translateWorkflowStepName(name: String): String = WorkflowStepI18n.translate(name)
 }
