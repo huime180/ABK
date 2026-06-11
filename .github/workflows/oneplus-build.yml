@@ -203,7 +203,8 @@ jobs:
             echo "::warning::MTK 分支已强制关闭代理相关网络优化。"
           fi
           if [ "$USE_KPM" = "true" ] && [ "$KSU_VARIANT" != "SukiSU" ] && [ "$KSU_VARIANT" != "ReSukiSU" ]; then
-            echo "::warning::KPM 仅支持 SukiSU/ReSukiSU，当前构建已关闭 KPM。"
+            echo "::error::Official / None 变体不支持 KPM，请关闭 KPM 后重试。"
+            exit 1
           fi
           if [ "$USE_LZ4KD" = "true" ] && [ "$KERNEL_VERSION" != "5.10" ] && [ "$KERNEL_VERSION" != "5.15" ] && [ "$KERNEL_VERSION" != "6.1" ] && [ "$KERNEL_VERSION" != "6.6" ]; then
             echo "::warning::当前 OnePlus 内核版本不在 lz4kd 支持矩阵内，已关闭 lz4kd。"
