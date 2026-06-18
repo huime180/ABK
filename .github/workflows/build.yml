@@ -567,14 +567,6 @@ jobs:
           restore-keys: |
             ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-
 
-      - name: 恢复 Bazel 缓存
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/bazel
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-bazel-${{ env.CACHE_CODE }}
-          restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-bazel-
-
       - name: 缓存工具链
         id: cache-toolchain
         uses: actions/cache@v5
