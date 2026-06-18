@@ -1594,6 +1594,7 @@ fun BuildScreen(
                     label = { Text(stringResource(R.string.build_add_defconfig)) },
                     placeholder = { Text(stringResource(R.string.build_add_defconfig_placeholder)) },
                     modifier = Modifier.fillMaxWidth()
+                )
                 OutlinedTextField(
                     value = config.version,
                     onValueChange = { vm.updateBuildConfig(config.copy(version = it)) },
@@ -1611,7 +1612,6 @@ fun BuildScreen(
                     singleLine = true
                 )
                 ConfigPreviewText(buildTimePreview)
-                )
             }
             }
 

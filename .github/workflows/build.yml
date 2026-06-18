@@ -537,9 +537,9 @@ jobs:
           apt_update_retry
           sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
-      - name: 配置缓存
+      - name: 配置 cache
         run: |
-          mkdir -p ~/.cache/bazel
+          mkdir -p ~/.cache/bazel out/cache
           ccache --version
           ccache --max-size=4G
           ccache --set-config=compression=true
@@ -547,20 +547,25 @@ jobs:
           echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
           mkdir -p "$CCACHE_DIR"
 
-          CACHE_CODE="$([[ '${{ inputs.enable_susfs }}' == 'true' ]] && echo -n 1 || echo -n 0)"
-          CACHE_CODE="$CACHE_CODE$([[ '${{ inputs.use_ddk }}' == 'true' ]] && echo -n 1 || echo -n 0)"
-          CACHE_CODE="$CACHE_CODE$([[ '${{ inputs.use_ntsync }}' == 'true' ]] && echo -n 1 || echo -n 0)"
-          CACHE_CODE="$CACHE_CODE$([[ '${{ inputs.use_rekernel }}' == 'true' ]] && echo -n 1 || echo -n 0)"
-          CACHE_CODE="$CACHE_CODE$([[ '${{ inputs.virtualization_support }}' != 'off' ]] && echo -n 1 || echo -n 0)"
+          CACHE_CODE=$(
+            [[ '${{ inputs.enable_susfs }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_ddk }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_ntsync }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_rekernel }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.virtualization_support }}' != 'off' ]] && echo -n 1 || echo -n 0
+          )
           echo "CACHE_CODE=$CACHE_CODE" >> $GITHUB_ENV
 
-      - name: 恢复 ccache 缓存
+      - name: 恢复 cache
         uses: actions/cache@v5
         with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-${{ env.CACHE_CODE }}
+          path: |
+            ${{ env.CCACHE_DIR }}
+            ~/.cache/bazel
+            out/cache
+          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-${{ env.CACHE_CODE }}
           restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
+            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-
 
       - name: 恢复 Bazel 缓存
         uses: actions/cache@v5
@@ -4802,7 +4807,7 @@ jobs:
               if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
                 LTO_FLAG="--lto=none"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=local --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
             echo "内核编译完成！"
