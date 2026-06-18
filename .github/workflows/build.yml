@@ -539,7 +539,7 @@ jobs:
 
       - name: 配置 cache
         run: |
-          mkdir -p ~/.cache/bazel
+          mkdir -p ~/.cache/bazel out/cache
           ccache --version
           ccache --max-size=4G
           ccache --set-config=compression=true
@@ -562,6 +562,7 @@ jobs:
           path: |
             ${{ env.CCACHE_DIR }}
             ~/.cache/bazel
+            out/cache
           key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-${{ env.CACHE_CODE }}
           restore-keys: |
             ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-
@@ -4798,7 +4799,7 @@ jobs:
               if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
                 LTO_FLAG="--lto=none"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=local --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
             fi
             echo "内核编译完成！"
