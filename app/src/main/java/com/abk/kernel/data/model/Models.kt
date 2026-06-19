@@ -642,6 +642,7 @@ data class AbkRuntimeBuildInfo(
     val version: String = "",
     @SerializedName("build_time") val buildTime: String = "",
     @SerializedName("add_defconfig") val addDefconfig: String = "",
+    @SerializedName("stock_config") val stockConfig: String = "",
     @SerializedName("virtualization_support") val virtualizationSupport: String = "",
     @SerializedName("zram_extra_algos") val zramExtraAlgos: String = "",
     val features: Map<String, Boolean> = emptyMap()
