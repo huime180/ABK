@@ -221,6 +221,9 @@
   "op_features_title": "OnePlus専用機能:",
   "features_title": "機能フラグ:",
   "default_build_info": "デフォルト: カスタムビルド (kernel-custom.yml), --sub-level と --os-patch-level が必要",
+  "matrix_item_desc": "--matrix {k:9} - {name} (全サブレベルをマトリクスビルド)",
+  "oneplus_item_desc": "--oneplus        - OnePlus/Oplusデバイス (--device必須)",
+  "custom_default_desc": "デフォルト: カスタムビルド (kernel-custom.yml)。--sub-level と --os-patch-level が必要",
   "workflow_404_hint": "ヒント: 404はワークフローが有効化されていません。Actionsタブで有効化してください",
   "arg_cancel": "実行中のビルドをキャンセル",
   "arg_rerun": "完了したビルドを再実行",
@@ -228,5 +231,17 @@
   "cancel_fail": "キャンセル失敗: {error}",
   "rerun_ok": "ビルド #{id} を再実行中",
   "rerun_fail": "再実行失敗: {error}",
-  "arg_build_time": "カスタムビルド時刻 (オプション)"
+  "artifact_verifying": "アーティファクトバンドルを検証中...",
+  "artifact_verified_ok": "署名検証に成功しました。",
+  "artifact_legacy_warning": "これはレガシーバンドルです。続行すると高リスクフローに入ります。",
+  "artifact_unverified_warning": "このバンドルは署名検証に合格していません — ダウンロード中に改ざんされた可能性があります。",
+  "artifact_verify_skip": "署名付きバンドルではないため、検証をスキップします。",
+  "artifact_verify_no_key": "署名キーが設定されていません、検証できません。",
+  "arg_build_time": "カスタムビルド時刻 (オプション)",
+  "arg_set_download_dir": "デフォルトのダウンロードディレクトリを設定（設定ファイルに保存）",
+  "download_dir_saved": "デフォルトのダウンロードディレクトリを設定しました: {dir}",
+  "signing_key_generating": "署名キーペアを生成中...",
+  "signing_key_generated": "署名キーが生成され、forkにアップロードされました。",
+  "artifact_verify_confirm": "セキュリティ: ダウンロード中にファイルが改ざんされた可能性があります (ネットワークハイジャックのリスク)。高リスク操作を続行しますか？(y/n): ",
+  "artifact_verify_skip_user": "スキップしました。"
 }
