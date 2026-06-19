@@ -1216,4 +1216,6 @@
     <string name="gh_root_must_be_object">Root node must be a JSON object</string>
     <string name="gh_missing_module_name">Missing ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">Module repository</string>
+    <string name="build_stock_config_title">Device Recognition &amp; Stock Config</string>
+    <string name="build_stock_config_desc">Three ways to obtain kernel config: ① Read /proc/config ② Unpack from boot.img ③ Fetch from repository. Save to config/stock_config/ for build use.</string>
 </resources>

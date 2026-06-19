@@ -34,6 +34,7 @@ import com.abk.kernel.utils.FailureLogExtractor
 import com.abk.kernel.utils.NotificationUtils
 import com.abk.kernel.utils.WorkflowStepI18n
 import com.abk.kernel.utils.RootUtils
+import com.abk.kernel.utils.StockConfigManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,14 @@ data class MainUiState(
     val validatingCustomExternalModule: Boolean = false,
     val customExternalModuleError: String? = null,
     val recommendedBuildConfig: KernelBuildConfig? = null,
+    // Stock Config — three methods to obtain kernel config
+    val stockConfigDeviceInfo: StockConfigManager.DeviceInfo? = null,
+    val stockConfigExtracting: Boolean = false,
+    val stockConfigExtractMethod: String = "",  // "proc" | "bootimg" | "repo"
+    val stockConfigOutput: List<String> = emptyList(),
+    val stockConfigLastPath: String? = null,
+    val stockConfigError: String? = null,
+    val cachedStockConfigs: List<File> = emptyList(),
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -736,6 +745,151 @@ class MainViewModel @JvmOverloads constructor(
                     buildConfig = initialConfig ?: it.buildConfig
                 )
             }
+        }
+    }
+
+    // ── Stock Config (Device Recognition + Boot Config Extraction) ────────
+
+    /** Detect the current device model and store it in state. */
+    fun detectDeviceModel() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val info = StockConfigManager.detectDevice()
+            val cached = StockConfigManager.listCachedConfigs(getApplication())
+            val matchingPath = cached.firstOrNull { file ->
+                val id = StockConfigManager.configIdFromFile(file)
+                id == info.configId || id == info.matchedManifest
+            }
+            _uiState.update {
+                it.copy(
+                    stockConfigDeviceInfo = info,
+                    stockConfigError = null,
+                    cachedStockConfigs = cached,
+                    stockConfigLastPath = matchingPath?.absolutePath
+                )
+            }
+        }
+    }
+
+    // ── Method 1: Extract from /proc/config ─────────────────────────
+
+    /** Extract kernel config from /proc/config.gz or /proc/config (may need root). */
+    fun extractStockConfigFromProc() {
+        if (_uiState.value.stockConfigExtracting) return
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "proc",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.extractFromProcConfig(app, device.configId) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishStockConfigExtraction(app, result)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 2: Extract from boot.img file ─────────────────────────
+
+    /** Extract kernel config from a user-selected boot.img file via SAF content URI. */
+    fun extractStockConfigFromBootImageUri(uri: android.net.Uri) {
+        if (_uiState.value.stockConfigExtracting) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "bootimg",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val localPath = StockConfigManager.copyContentUriToLocal(app, uri)
+                if (localPath == null) {
+                    throw Exception("无法读取选中的 boot.img 文件")
+                }
+                val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+                val result = StockConfigManager.extractFromBootImageFile(
+                    app, localPath, device.configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                // Clean up temp file
+                try { java.io.File(localPath).delete() } catch (_: Exception) {}
+                finishStockConfigExtraction(app, result)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 3: Fetch from repository ──────────────────────────────
+
+    /** Fetch stock_config for a given device ID from the remote GitHub repo. */
+    fun fetchStockConfigFromRepo(deviceId: String) {
+        if (_uiState.value.stockConfigExtracting) return
+        val user = _uiState.value.user?.login ?: return
+        val repo = _uiState.value.forkRepo?.name ?: return
+        val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "repo",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.fetchFromRepository(
+                    app, user, repo, branch, deviceId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishStockConfigExtraction(app, result)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    /** Shared completion handler for all three extraction methods. */
+    private fun finishStockConfigExtraction(app: Application, result: StockConfigManager.StockConfigResult) {
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigExtracting = false,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(result.deviceInfo.configId)
+        }
+    }
+
+    /** Apply a cached stock config to the current build config. */
+    fun applyStockConfigToBuildConfig(configId: String) {
+        val path = StockConfigManager.stockConfigPath(getApplication(), configId)
+        if (!path.isFile) return
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = configId),
+                stockConfigLastPath = path.absolutePath,
+                stockConfigError = null
+            )
+        }
+    }
+
+    /** Clear the stock config selection. */
+    fun clearStockConfig() {
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = ""),
+                stockConfigLastPath = null
+            )
         }
     }
 
@@ -5319,6 +5473,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
         "use_custom_external_modules" to config.useCustomExternalModules.toString(),
+        "stock_config" to config.stockConfig.trim(),
         "custom_ref" to if (config.kernelsuBranch == KSU_BRANCH_CUSTOM) {
             config.customRef.trim()
         } else {

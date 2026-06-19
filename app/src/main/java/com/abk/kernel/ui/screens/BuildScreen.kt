@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -88,10 +89,14 @@ import com.abk.kernel.ui.theme.uiSurfaceColor
 import com.abk.kernel.viewmodel.BuildPlanImportPreview
 import com.abk.kernel.viewmodel.BuildPlanShareScope
 import com.abk.kernel.viewmodel.MainViewModel
+import com.abk.kernel.utils.StockConfigManager
 import coil.compose.AsyncImage
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1587,6 +1592,14 @@ fun BuildScreen(
                 }
             }
 
+            SectionCard(section = BuildSection.StockConfig) {
+                StockConfigContent(
+                    vm = vm,
+                    state = state,
+                    rootGranted = state.rootGranted
+                )
+            }
+
             SectionCard(section = BuildSection.OptionalConfig) {
                 OutlinedTextField(
                     value = config.version,
@@ -3018,6 +3031,7 @@ private enum class BuildSection {
     ZramOptions,
     KpmOptions,
     CustomModules,
+    StockConfig,
     OptionalConfig
 }
 
@@ -3031,6 +3045,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_zram_options)
             BuildSection.KpmOptions -> stringResource(R.string.build_kpm_options)
             BuildSection.CustomModules -> stringResource(R.string.build_custom_modules)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_title)
             BuildSection.OptionalConfig -> stringResource(R.string.build_optional_config)
         },
         subtitle = when (section) {
@@ -3040,6 +3055,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_section_zram_desc)
             BuildSection.KpmOptions -> stringResource(R.string.build_section_kpm_desc)
             BuildSection.CustomModules -> stringResource(R.string.build_section_custom_modules_desc)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_desc)
             BuildSection.OptionalConfig -> stringResource(R.string.build_section_default_desc)
         },
         icon = when (section) {
@@ -3049,10 +3065,381 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> Icons.Default.Compress
             BuildSection.KpmOptions -> Icons.Default.Key
             BuildSection.CustomModules -> Icons.Default.Extension
+            BuildSection.StockConfig -> Icons.Default.PhoneAndroid
             else -> Icons.Default.Edit
         },
         content = content
     )
+}
+
+@Composable
+private fun StockConfigContent(
+    vm: MainViewModel,
+    state: com.abk.kernel.viewmodel.MainUiState,
+    rootGranted: Boolean
+) {
+    val deviceInfo = state.stockConfigDeviceInfo
+    val isExtracting = state.stockConfigExtracting
+    val extractMethod = state.stockConfigExtractMethod
+
+    // File picker for boot.img (method 2)
+    val bootImgPicker = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { vm.extractStockConfigFromBootImageUri(it) }
+    }
+
+    // Expandable state for each method section
+    var method1Expanded by rememberSaveable { mutableStateOf(false) }
+    var method2Expanded by rememberSaveable { mutableStateOf(false) }
+    var method3Expanded by rememberSaveable { mutableStateOf(false) }
+    var showOutput by rememberSaveable { mutableStateOf(false) }
+
+    // ── Device Info ──────────────────────────────────────────────────
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (deviceInfo != null) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = deviceInfo.displayName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "${deviceInfo.manufacturer} · ${deviceInfo.product} · ${deviceInfo.board}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (deviceInfo.matchedManifest != null) {
+                    Text(
+                        text = "已匹配: ${deviceInfo.matchedManifest}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+        }
+        FilledTonalIconButton(
+            onClick = { vm.detectDeviceModel() },
+            enabled = !isExtracting,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Icon(Icons.Default.Search, "识别", modifier = Modifier.size(18.dp))
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // ── Method 1: /proc/config ───────────────────────────────────────
+    MethodHeader(
+        icon = Icons.Default.Terminal,
+        label = "方式1: 从本机 /proc/config 提取",
+        desc = "读取本机内核 /proc/config.gz（可能需要 root）",
+        expanded = method1Expanded,
+        onToggle = { method1Expanded = !method1Expanded },
+        active = extractMethod == "proc"
+    )
+    AnimatedVisibility(visible = method1Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
+            Text(
+                text = "直接从运行中的内核读取 /proc/config.gz 或 /proc/config。无需选择文件，部分设备可能不需要 root。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            Button(
+                onClick = {
+                    method1Expanded = false; showOutput = true
+                    vm.extractStockConfigFromProc()
+                },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                enabled = !isExtracting
+            ) {
+                Icon(
+                    if (extractMethod == "proc" && isExtracting) Icons.Default.Refresh else Icons.Default.Download,
+                    null, modifier = Modifier.size(17.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (extractMethod == "proc" && isExtracting) "提取中…" else "从 /proc/config 提取")
+            }
+        }
+    }
+
+    Spacer(Modifier.height(6.dp))
+
+    // ── Method 2: boot.img file ──────────────────────────────────────
+    MethodHeader(
+        icon = Icons.Default.Archive,
+        label = "方式2: 从 boot.img 文件提取",
+        desc = "选择一个 boot.img 使用 magiskboot 解包提取（需要 root）",
+        expanded = method2Expanded,
+        onToggle = { method2Expanded = !method2Expanded },
+        active = extractMethod == "bootimg"
+    )
+    AnimatedVisibility(visible = method2Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
+            Text(
+                text = "选择一个本机或从其他来源获取的 boot.img 文件，使用 magiskboot 解包提取其中编译的内核配置 (kconfig)。需要 root 权限运行 magiskboot。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            Button(
+                onClick = {
+                    method2Expanded = false; showOutput = true
+                    bootImgPicker.launch(arrayOf("*/*"))
+                },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                enabled = rootGranted && !isExtracting
+            ) {
+                Icon(
+                    if (extractMethod == "bootimg" && isExtracting) Icons.Default.Refresh else Icons.Default.FolderOpen,
+                    null, modifier = Modifier.size(17.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (extractMethod == "bootimg" && isExtracting) "提取中…"
+                    else if (!rootGranted) "需要 Root 权限"
+                    else "选择 boot.img 文件并提取"
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(6.dp))
+
+    // ── Method 3: Repository ─────────────────────────────────────────
+    val isLoggedIn = state.isLoggedIn && state.forkRepo != null
+    MethodHeader(
+        icon = Icons.Default.CloudDownload,
+        label = "方式3: 从仓库获取",
+        desc = if (isLoggedIn) "从 GitHub 仓库 config/stock_config/ 下载"
+                else "从 GitHub 仓库下载（需要先登录）",
+        expanded = method3Expanded,
+        onToggle = { method3Expanded = !method3Expanded },
+        active = extractMethod == "repo"
+    )
+    AnimatedVisibility(visible = method3Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
+            if (!isLoggedIn) {
+                Text(
+                    text = "需要先完成 GitHub 登录和 Fork 配置，才能从你的仓库下载 stock_config。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                val targetId = deviceInfo?.configId ?: ""
+                val repoPath = "${state.user?.login}/${state.forkRepo?.name}"
+                Text(
+                    text = "从 $repoPath 的 config/stock_config/ 目录拉取 ${targetId}_stock_config。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = {
+                        method3Expanded = false; showOutput = true
+                        vm.fetchStockConfigFromRepo(targetId)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    enabled = targetId.isNotBlank() && !isExtracting
+                ) {
+                    Icon(
+                        if (extractMethod == "repo" && isExtracting) Icons.Default.Refresh else Icons.Default.CloudDownload,
+                        null, modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (extractMethod == "repo" && isExtracting) "下载中…" else "从仓库获取 ${targetId}_stock_config")
+                }
+            }
+        }
+    }
+
+    // ── Extraction output log ────────────────────────────────────────
+    if (state.stockConfigOutput.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        TextButton(
+            onClick = { showOutput = !showOutput },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                if (showOutput) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                null, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(if (showOutput) "隐藏输出" else "显示输出 (${state.stockConfigOutput.size} 行)")
+        }
+        AnimatedVisibility(visible = showOutput, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    state.stockConfigOutput.takeLast(15).forEach { line ->
+                        val isError = line.contains("✗") || line.contains("失败") || line.contains("failed")
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isError) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Error display ────────────────────────────────────────────────
+    state.stockConfigError?.let { error ->
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(text = error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+
+    // ── Last path / success ──────────────────────────────────────────
+    state.stockConfigLastPath?.let { path ->
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = path,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+
+    // ── Cached configs ───────────────────────────────────────────────
+    val cachedConfigs = state.cachedStockConfigs
+    if (cachedConfigs.isNotEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "已缓存的 stock_config",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        cachedConfigs.take(6).forEach { file ->
+            val configId = StockConfigManager.configIdFromFile(file)
+            val isSelected = configId == state.buildConfig.stockConfig
+            OutlinedButton(
+                onClick = { vm.applyStockConfigToBuildConfig(configId) },
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                colors = if (isSelected) ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ) else ButtonDefaults.outlinedButtonColors()
+            ) {
+                Icon(
+                    if (isSelected) Icons.Default.CheckCircle else Icons.Default.Description,
+                    null, modifier = Modifier.size(16.dp),
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(6.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = configId, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        text = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(file.lastModified())),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (state.buildConfig.stockConfig.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            TextButton(
+                onClick = { vm.clearStockConfig() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Close, null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("取消使用 stock_config")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MethodHeader(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    desc: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    active: Boolean
+) {
+    val bgColor = if (active) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    }
+    Surface(
+        onClick = onToggle,
+        shape = RoundedCornerShape(10.dp),
+        color = bgColor,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon, null,
+                tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
+                )
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+            }
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            if (active) {
+                Spacer(Modifier.width(4.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp
+                )
+            }
+        }
+    }
 }
 
 @Composable

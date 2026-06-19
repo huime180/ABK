@@ -604,7 +604,8 @@ data class KernelBuildConfig(
     val onePlusUseLz4kd: Boolean = false,
     val onePlusUseBbr: Boolean = false,
     val onePlusUseProxyOptimization: Boolean = true,
-    val onePlusUseUnicodeBypass: Boolean = false
+    val onePlusUseUnicodeBypass: Boolean = false,
+    val stockConfig: String = ""
 )
 
 data class AbkRuntimeStatus(

@@ -1216,4 +1216,6 @@
     <string name="gh_root_must_be_object">根节点必须是 JSON 对象</string>
     <string name="gh_missing_module_name">缺少 ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">模块仓库</string>
+    <string name="build_stock_config_title">机型识别 &amp; Stock Config</string>
+    <string name="build_stock_config_desc">三种方式获取内核配置：① 从 /proc/config 读取 ② 从 boot.img 解包 ③ 从仓库获取。提交到 config/stock_config/ 目录供构建使用。</string>
 </resources>
