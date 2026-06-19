@@ -1,0 +1,1 @@
+# Stock Config Directory\n# This directory stores device-specific kernel configs extracted from boot.img\n# Files are named: <device_id>_stock_config\n# These configs can be referenced in builds via the stock_config parameter.\n

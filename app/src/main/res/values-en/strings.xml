@@ -120,6 +120,9 @@
     <string name="build_failed">Build failed</string>
     <string name="build_queued">Build queued</string>
     <string name="build_confirm_submit">Confirm build submission</string>
+    <string name="build_submitted_title">Build submitted</string>
+    <string name="build_submitted_desc">Build submitted successfully. Go to Status to track progress.</string>
+    <string name="build_submitted_ok">OK</string>
     <string name="build_config_overview">Build configuration overview:</string>
     <string name="build_kernel_line">Android %1$s · Kernel %2$s.%3$s</string>
     <string name="build_patch_level_line">Patch level: %1$s</string>
@@ -205,6 +208,41 @@
     <string name="build_kpm_password_placeholder">Empty uses the default password</string>
     <string name="build_custom_modules">Custom external modules</string>
     <string name="build_enable_custom_modules">Enable custom external modules</string>
+    <string name="extension_invalid_id">Invalid extension ID</string>
+    <string name="extension_asset_missing">Extension install asset was not found</string>
+    <string name="extension_download_missing">Extension did not declare a download URL</string>
+    <string name="extension_install_success">%1$s installed</string>
+    <string name="extension_install_failed">Extension install failed</string>
+    <string name="extension_oobe_missing">Extension did not declare an OOBE entry</string>
+    <string name="extension_settings_missing">Extension did not declare a settings entry</string>
+    <string name="extension_launch_failed">Failed to launch extension</string>
+    <string name="extension_companion_open_failed">Unable to open the companion app</string>
+    <string name="extension_manager_title">ABK Extensions</string>
+    <string name="extension_bootstrap_title">ABK Extension Setup</string>
+    <string name="extension_bootstrap_locked">You must finish the current extension setup first</string>
+    <string name="extension_manager_empty_title">No managed extensions found</string>
+    <string name="extension_manager_empty_desc">No injected ABK extensions are active in the current runtime. They will appear here after injection.</string>
+    <string name="extension_bootstrap_install_title">Install the companion app first</string>
+    <string name="extension_bootstrap_install_desc">This extension depends on %1$s. Install it before continuing setup.</string>
+    <string name="extension_bootstrap_install_dialog_title">Companion app required</string>
+    <string name="extension_bootstrap_install_dialog_desc">Extension %1$s requires %2$s to be installed before setup or service startup can continue.</string>
+    <string name="extension_bootstrap_oobe_required_title">Extension setup is required</string>
+    <string name="extension_bootstrap_oobe_required_desc">An OOBE entry was detected for this extension. You must complete the first-time setup to continue.</string>
+    <string name="extension_bootstrap_service_title">Extension service will be opened</string>
+    <string name="extension_bootstrap_service_desc">This extension declares a startup service entry. Continuing will open that page directly.</string>
+    <string name="extension_bootstrap_oobe_missing_title">The extension does not provide OOBE</string>
+    <string name="extension_bootstrap_oobe_missing_desc">%1$s is installed, but it does not declare an OOBE entry. Open the companion app and complete setup there.</string>
+    <string name="extension_install_action">Install extension</string>
+    <string name="extension_run_oobe_action">Run OOBE</string>
+    <string name="extension_run_service_action">Start service</string>
+    <string name="extension_open_companion_action">Open companion app</string>
+    <string name="extension_open_settings_action">Extension settings</string>
+    <string name="extension_reset_action">Reset</string>
+    <string name="extension_status_pending_oobe">First-time setup required</string>
+    <string name="extension_status_oobe_complete">First-time setup complete</string>
+    <string name="extension_status_companion_ready">Companion ready</string>
+    <string name="extension_status_companion_missing">Companion missing</string>
+    <string name="extension_missing_companion_desc">Companion app is not installed: %1$s</string>
     <string name="build_add_from_module_repo">Add from module repository</string>
     <string name="build_manual_add">Add manually</string>
     <string name="build_repo_url">Repository URL</string>
@@ -556,6 +594,9 @@
     <string name="settings_build">Build</string>
     <string name="settings_notification">Notifications</string>
     <string name="settings_about">About</string>
+    <string name="settings_extensions_title">Extensions</string>
+    <string name="settings_extensions_manage">Manage extensions</string>
+    <string name="settings_extensions_manage_desc">View injected extensions, install companion apps, rerun OOBE, and open extension settings.</string>
     <string name="settings_version">Version</string>
     <string name="settings_source_repo">Source repository</string>
     <string name="settings_workflow_foreground_refresh">Auto-refresh workflows</string>
@@ -708,6 +749,8 @@
     <string name="download_http_failed">Download request failed (HTTP %1$d)</string>
     <string name="download_empty_response">Download response was empty</string>
     <string name="download_unknown_error">Download failed</string>
+    <string name="flash_bundle_legacy_requires_confirmation">This is a legacy flash bundle. Continuing enters the high-risk flow.</string>
+    <string name="flash_bundle_unverified_requires_confirmation">This flash bundle has not passed signature verification. Continuing enters the high-risk flow.</string>
     <string name="settings_download_mirror">Download mirror</string>
     <string name="settings_download_mirror_desc">Leave empty to connect directly to GitHub. If set, artifacts mirror to releases before download.</string>
 
@@ -1176,4 +1219,6 @@
     <string name="gh_root_must_be_object">Root node must be a JSON object</string>
     <string name="gh_missing_module_name">Missing ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">Module repository</string>
+    <string name="build_stock_config_title">Device Recognition &amp; Stock Config</string>
+    <string name="build_stock_config_desc">1. Read /proc/config (login+fork) 2. Unpack boot.img (login+fork+root) 3. Fetch from remote repo (no login). After extraction, auto-push to fork config/stock_config/.</string>
 </resources>

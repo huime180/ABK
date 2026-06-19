@@ -28,11 +28,13 @@ import com.abk.kernel.utils.BuildProgressUtils
 import com.abk.kernel.utils.buildDisplaySnapshot
 import com.abk.kernel.utils.computeKindBuildProgress
 import com.abk.kernel.utils.DownloadDirectoryUtils
+import com.abk.kernel.utils.ForkSigningManager
 import com.abk.kernel.utils.DownloadUtils
 import com.abk.kernel.utils.FailureLogExtractor
 import com.abk.kernel.utils.NotificationUtils
 import com.abk.kernel.utils.WorkflowStepI18n
 import com.abk.kernel.utils.RootUtils
+import com.abk.kernel.utils.StockConfigManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
@@ -141,6 +143,14 @@ data class MainUiState(
     val validatingCustomExternalModule: Boolean = false,
     val customExternalModuleError: String? = null,
     val recommendedBuildConfig: KernelBuildConfig? = null,
+    // Stock Config — three methods to obtain kernel config
+    val stockConfigDeviceInfo: StockConfigManager.DeviceInfo? = null,
+    val stockConfigExtracting: Boolean = false,
+    val stockConfigExtractMethod: String = "",  // "proc" | "bootimg" | "repo"
+    val stockConfigOutput: List<String> = emptyList(),
+    val stockConfigLastPath: String? = null,
+    val stockConfigError: String? = null,
+    val cachedStockConfigs: List<File> = emptyList(),
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -233,6 +243,7 @@ class MainViewModel @JvmOverloads constructor(
     github: GitHubRepository = GitHubRepository(),
     private val registerStatusBroadcast: Boolean = true,
 ) : AndroidViewModel(application) {
+    private val forkSigningInitMutex = Mutex()
 
     private val prefs = PreferencesRepository(application)
     val github: GitHubRepository = github
@@ -737,6 +748,197 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
+    // ── Stock Config (Device Recognition + Boot Config Extraction) ────────
+
+    /** Detect the current device model and store it in state. */
+    fun detectDeviceModel() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val info = StockConfigManager.detectDevice()
+            val cached = StockConfigManager.listCachedConfigs(getApplication())
+            val matchingPath = cached.firstOrNull { file ->
+                val id = StockConfigManager.configIdFromFile(file)
+                id == info.configId || id == info.matchedManifest
+            }
+            _uiState.update {
+                it.copy(
+                    stockConfigDeviceInfo = info,
+                    stockConfigError = null,
+                    cachedStockConfigs = cached,
+                    stockConfigLastPath = matchingPath?.absolutePath
+                )
+            }
+        }
+    }
+
+    // ── Method 1: Extract from /proc/config ─────────────────────────
+
+    /** Extract kernel config from /proc/config. Requires login + fork, optionally root. */
+    fun extractStockConfigFromProc() {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "proc",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.extractFromProcConfig(app, device.configId) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishAndPushStockConfig(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 2: Extract from boot.img file ─────────────────────────
+
+    /** Extract from a boot.img via SAF URI. Requires login + fork + root. */
+    fun extractStockConfigFromBootImageUri(uri: android.net.Uri) {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "bootimg",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val localPath = StockConfigManager.copyContentUriToLocal(app, uri)
+                    ?: throw Exception("无法读取选中的 boot.img 文件")
+                val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+                val result = StockConfigManager.extractFromBootImageFile(
+                    app, localPath, device.configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                try { java.io.File(localPath).delete() } catch (_: Exception) {}
+                finishAndPushStockConfig(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 3: Fetch from repository ──────────────────────────────
+
+    /** Fetch stock_config for deviceId from the remote upstream repo (no login needed). */
+    fun fetchStockConfigFromRepo(deviceId: String) {
+        if (_uiState.value.stockConfigExtracting) return
+        val user = _uiState.value.forkRepo?.owner?.login
+            ?: _uiState.value.user?.login ?: ""
+        val repo = _uiState.value.forkRepo?.name ?: "ABK"
+        val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "repo",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.fetchFromRepository(
+                    app, user, repo, branch, deviceId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishStockConfigExtraction(app, result)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    /** Shared completion for method 3 (no push). */
+    private fun finishStockConfigExtraction(app: Application, result: StockConfigManager.StockConfigResult) {
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigExtracting = false,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(result.deviceInfo.configId)
+        }
+    }
+
+    /** Completion for methods 1 & 2: also push to fork repo. */
+    private suspend fun finishAndPushStockConfig(
+        app: Application,
+        result: StockConfigManager.StockConfigResult,
+        configId: String
+    ) {
+        // Update local state first
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(configId)
+            // Push to fork repo
+            val token = prefs.accessToken.first() ?: ""
+            if (token.isNotBlank()) {
+                val owner = _uiState.value.forkRepo?.owner?.login
+                    ?: _uiState.value.user?.login ?: return
+                val repo = _uiState.value.forkRepo?.name ?: return
+                val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+                val pushSuccess = StockConfigManager.pushStockConfigToFork(
+                    app, token, owner, repo, branch, configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                if (!pushSuccess) {
+                    _uiState.update {
+                        it.copy(stockConfigError = "提取成功但推送到仓库失败，请检查网络或权限")
+                    }
+                }
+            }
+        }
+        _uiState.update { it.copy(stockConfigExtracting = false) }
+    }
+
+    /** Apply a cached stock config to the current build config. */
+    fun applyStockConfigToBuildConfig(configId: String) {
+        val path = StockConfigManager.stockConfigPath(getApplication(), configId)
+        if (!path.isFile) return
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = configId),
+                stockConfigLastPath = path.absolutePath,
+                stockConfigError = null
+            )
+        }
+    }
+
+    /** Clear the stock config selection. */
+    fun clearStockConfig() {
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = ""),
+                stockConfigLastPath = null
+            )
+        }
+    }
+
     fun setRuntimeNavigationEnabled(enabled: Boolean) = runtime.setRuntimeNavigationEnabled(enabled)
 
     fun setWebViewDebugEnabled(enabled: Boolean) {
@@ -1000,6 +1202,7 @@ class MainViewModel @JvmOverloads constructor(
                                 showSyncPrompt = showSyncPrompt && behind > 0
                             )
                         }
+                        ensureForkArtifactSigningReady(username, fork)
                         onForkContextReady()
                         authOobe.completeIfRequested(closeOobeWhenReady)
                         if (behind <= 0) {
@@ -1027,6 +1230,7 @@ class MainViewModel @JvmOverloads constructor(
                             showSyncPrompt = false
                         )
                     }
+                    ensureForkArtifactSigningReady(readStateUserLogin() ?: return@launch, r.data)
                     onForkContextReady()
                     authOobe.completeIfRequested(closeOobeWhenReady = true)
                     maybeOpenForkI18nGate()
@@ -1065,6 +1269,118 @@ class MainViewModel @JvmOverloads constructor(
         loadRecentRuns()
         ensureBuildWorkflowEnabled()
         processBuildQueue()
+    }
+
+    private fun readStateUserLogin(): String? = _uiState.value.user?.login
+
+    private suspend fun ensureForkArtifactSigningReady(owner: String, fork: GitHubRepo) {
+        forkSigningInitMutex.withLock {
+            val secretName = FORK_ARTIFACT_SIGNING_SECRET_NAME
+            val releaseTag = FORK_ARTIFACT_SIGNING_RELEASE_TAG
+
+            val remoteRelease = when (val release = github.getReleaseByTag(owner, fork.name, releaseTag)) {
+                is Result.Success -> release.data
+                is Result.Error -> {
+                    showSnackbar("Fork signing init failed: ${release.message}", longDuration = true)
+                    return
+                }
+                Result.Loading -> return
+            }
+
+            val release = when {
+                remoteRelease != null -> remoteRelease
+                else -> when (val created = github.createRelease(
+                    owner,
+                    fork.name,
+                    CreateReleaseRequest(
+                        tagName = releaseTag,
+                        targetCommitish = fork.defaultBranch,
+                        name = "ABK Artifact Signing Key",
+                        body = "ABK fork-scoped artifact signing public key.",
+                        prerelease = true
+                    )
+                )) {
+                    is Result.Success -> created.data
+                    is Result.Error -> {
+                        showSnackbar("Fork signing release init failed: ${created.message}", longDuration = true)
+                        return
+                    }
+                    Result.Loading -> return
+                }
+            }
+
+            val releaseAssets = when (val assets = github.listReleaseAssets(owner, fork.name, release.id)) {
+                is Result.Success -> assets.data
+                is Result.Error -> {
+                    showSnackbar("Fork signing asset query failed: ${assets.message}", longDuration = true)
+                    return
+                }
+                Result.Loading -> return
+            }
+            val secretExists = when (val secrets = github.listRepositorySecrets(owner, fork.name)) {
+                is Result.Success -> secrets.data.any { it.name == secretName }
+                is Result.Error -> {
+                    showSnackbar("Fork signing secret query failed: ${secrets.message}", longDuration = true)
+                    return
+                }
+                Result.Loading -> return
+            }
+            val existingPublicKeyAsset = releaseAssets.firstOrNull { it.name == FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME }
+            val existingPublicKey = prefs.forkArtifactSigningPublicKey.first()
+            if (secretExists && !existingPublicKey.isNullOrBlank()) {
+                prefs.saveForkArtifactSigningSecretName(secretName)
+                prefs.saveForkArtifactSigningReleaseTag(releaseTag)
+                return
+            }
+            if (secretExists && existingPublicKeyAsset != null) {
+                val pem = when (val downloaded = github.downloadReleaseAssetText(owner, fork.name, release.id, FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME)) {
+                    is Result.Success -> downloaded.data
+                    else -> null
+                }
+                if (!pem.isNullOrBlank()) {
+                    val base64 = pem.lineSequence()
+                        .filterNot { it.startsWith("-----") }
+                        .joinToString("")
+                        .trim()
+                    if (base64.isNotBlank()) {
+                        prefs.saveForkArtifactSigningPublicKey(base64)
+                        prefs.saveForkArtifactSigningSecretName(secretName)
+                        prefs.saveForkArtifactSigningReleaseTag(releaseTag)
+                        return
+                    }
+                }
+            }
+
+            val material = ForkSigningManager.generateSigningMaterial()
+            when (val secret = github.createOrUpdateRepositorySecret(owner, fork.name, secretName, material.privateKeyBase64)) {
+                is Result.Success -> Unit
+                is Result.Error -> {
+                    showSnackbar("Fork signing secret init failed: ${secret.message}", longDuration = true)
+                    return
+                }
+                Result.Loading -> return
+            }
+
+            releaseAssets.filter { it.name == FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME }.forEach { asset ->
+                github.deleteReleaseAsset(owner, fork.name, asset.id)
+            }
+            when (val uploaded = github.uploadReleaseAsset(
+                uploadUrlTemplate = release.uploadUrl ?: "",
+                fileName = FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME,
+                contentType = "application/x-pem-file",
+                content = material.publicKeyPem.toByteArray(StandardCharsets.UTF_8)
+            )) {
+                is Result.Success -> {
+                    prefs.saveForkArtifactSigningPublicKey(material.publicKeyBase64)
+                    prefs.saveForkArtifactSigningSecretName(secretName)
+                    prefs.saveForkArtifactSigningReleaseTag(releaseTag)
+                }
+                is Result.Error -> {
+                    showSnackbar("Fork signing public key publish failed: ${uploaded.message}", longDuration = true)
+                }
+                Result.Loading -> {}
+            }
+        }
     }
 
     private fun ensureBuildWorkflowEnabled() {
@@ -2384,6 +2700,10 @@ class MainViewModel @JvmOverloads constructor(
         runCatching {
             val file = File(artifact.filePath)
             if (file.exists()) file.delete()
+            val sidecarDir = file.parentFile?.let { File(it, "${file.name}.deps") }
+            if (sidecarDir?.exists() == true) {
+                sidecarDir.deleteRecursively()
+            }
             val parent = file.parentFile
             if (parent?.listFiles()?.isEmpty() == true) {
                 parent.delete()
@@ -5119,9 +5439,9 @@ internal fun isPrebuiltGkiReleaseCandidate(release: GitHubReleaseSummary): Boole
 internal fun isPrebuiltGkiCandidate(asset: PrebuiltGkiAsset): Boolean {
     val lower = asset.name.lowercase()
     val type = DownloadUtils.classifyArtifact(asset.name)
+    if (!lower.endsWith(".bundle.zip")) return false
     return type in setOf(ArtifactType.KERNEL_PACKAGE, ArtifactType.KERNEL_IMG, ArtifactType.ANYKERNEL3) ||
-        ((lower.endsWith(".img") || lower.endsWith(".zip")) &&
-            listOf("gki", "kernel", "boot", "anykernel", "ak3").any { lower.contains(it) })
+        listOf("gki", "kernel", "boot", "anykernel", "ak3").any { lower.contains(it) }
 }
 
 internal fun prebuiltGkiComparator(
@@ -5205,6 +5525,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "zram_extra_algos" to config.zramExtraAlgos,
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
+        "stock_config" to config.stockConfig.trim(),
         "custom_ref" to if (config.kernelsuBranch == KSU_BRANCH_CUSTOM) {
             config.customRef.trim()
         } else {
@@ -5242,6 +5563,9 @@ private fun List<CustomExternalModule>?.toWorkflowInput(): String = this.orEmpty
     .joinToString("|")
 
 private const val KERNEL_WORKFLOW_FILE = "kernel-custom.yml"
+private const val FORK_ARTIFACT_SIGNING_SECRET_NAME = "ABK_ARTIFACT_SIGNING_KEY_BASE64"
+private const val FORK_ARTIFACT_SIGNING_RELEASE_TAG = "abk-artifact-key"
+private const val FORK_ARTIFACT_SIGNING_PUBLIC_KEY_ASSET_NAME = "abk-artifact-signing-public.pem"
 private const val ONEPLUS_WORKFLOW_FILE = "oneplus-custom.yml"
 private val buildWorkflowFiles = listOf(KERNEL_WORKFLOW_FILE, ONEPLUS_WORKFLOW_FILE)
 private const val MIRROR_WORKFLOW_FILE = "mirror-custom-artifacts.yml"

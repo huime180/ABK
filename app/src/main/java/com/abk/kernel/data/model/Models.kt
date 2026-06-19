@@ -209,6 +209,7 @@ data class GitHubRelease(
     @SerializedName("published_at") val publishedAt: String? = null,
     val body: String? = null,
     @SerializedName("assets_url") val assetsUrl: String? = null,
+    @SerializedName("upload_url") val uploadUrl: String? = null,
     val assets: List<ReleaseAsset> = emptyList()
 )
 
@@ -349,6 +350,37 @@ data class AccessTokenResponse(
     @SerializedName("scope") val scope: String?,
     val error: String?,
     @SerializedName("error_description") val errorDescription: String?
+)
+
+data class GitHubSecretPublicKey(
+    @SerializedName("key_id") val keyId: String,
+    @SerializedName("key") val key: String
+)
+
+data class GitHubRepositorySecret(
+    val name: String,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("updated_at") val updatedAt: String? = null
+)
+
+data class GitHubRepositorySecretsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    @SerializedName("secrets") val secrets: List<GitHubRepositorySecret> = emptyList()
+)
+
+data class CreateOrUpdateRepositorySecretRequest(
+    @SerializedName("encrypted_value") val encryptedValue: String,
+    @SerializedName("key_id") val keyId: String
+)
+
+data class CreateReleaseRequest(
+    @SerializedName("tag_name") val tagName: String,
+    @SerializedName("target_commitish") val targetCommitish: String? = null,
+    val name: String? = null,
+    val body: String? = null,
+    val draft: Boolean = false,
+    val prerelease: Boolean = true,
+    @SerializedName("generate_release_notes") val generateReleaseNotes: Boolean = false
 )
 
 data class Workflow(
@@ -574,7 +606,8 @@ data class KernelBuildConfig(
     val onePlusUseLz4kd: Boolean = false,
     val onePlusUseBbr: Boolean = false,
     val onePlusUseProxyOptimization: Boolean = true,
-    val onePlusUseUnicodeBypass: Boolean = false
+    val onePlusUseUnicodeBypass: Boolean = false,
+    val stockConfig: String = ""
 )
 
 data class AbkRuntimeStatus(
@@ -585,7 +618,8 @@ data class AbkRuntimeStatus(
     val manager: AbkRuntimeManagerInfo? = null,
     @SerializedName("runtime_backend") val runtimeBackend: AbkRuntimeManagerInfo? = null,
     val build: AbkRuntimeBuildInfo? = null,
-    val modules: List<AbkRuntimeModule> = emptyList()
+    val modules: List<AbkRuntimeModule> = emptyList(),
+    @SerializedName("extension_modules") val extensionModules: List<AbkRuntimeModule> = emptyList()
 )
 
 data class AbkRuntimeManagerInfo(
@@ -624,7 +658,14 @@ data class AbkRuntimeModule(
     val description: String = "",
     @SerializedName("repo_url") val repoUrl: String = "",
     val stage: String = "",
+    @SerializedName("entry_kind") val entryKind: String = "",
     val source: String = "",
+    @SerializedName("extension_id") val extensionId: String = "",
+    @SerializedName("companion_package") val companionPackage: String = "",
+    @SerializedName("companion_display_name") val companionDisplayName: String = "",
+    @SerializedName("companion_asset_name") val companionAssetName: String = "",
+    @SerializedName("companion_download_url") val companionDownloadUrl: String = "",
+    @SerializedName("service_activity") val serviceActivity: String = "",
     @SerializedName("module_dir") val moduleDir: String = "",
     @SerializedName("web_root") val webRoot: String = "",
     val readonly: Boolean = false,
@@ -635,6 +676,10 @@ data class AbkRuntimeModule(
     @SerializedName("has_web_ui") val hasWebUi: Boolean = false,
     @SerializedName("has_action_script") val hasActionScript: Boolean = false,
     @SerializedName("action_supported") val actionSupported: Boolean = false,
+    @SerializedName("requires_companion_app") val requiresCompanionApp: Boolean = false,
+    @SerializedName("settings_supported") val settingsSupported: Boolean = false,
+    @SerializedName("per_app_supported") val perAppSupported: Boolean = false,
+    @SerializedName("oobe_priority") val oobePriority: Int = 0,
     @SerializedName("kpm_args") val kpmArgs: String = "",
     @SerializedName("group_id") val groupId: String = "",
     @SerializedName("group_name") val groupName: String = "",
@@ -750,6 +795,8 @@ data class DownloadedArtifact(
     val runNumber: Int = 0,
     val sourceAssetId: Long = 0L,
     val sourceAssetName: String? = null,
+    val verified: Boolean = false,
+    val verificationSummary: String? = null,
     val category: ArtifactCategory = type.toArtifactCategory()
 )
 
