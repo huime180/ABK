@@ -1730,6 +1730,7 @@ fun BuildScreen(
         }
     }
 }
+}
 
 @Composable
 private fun BuildPlanPageBackground(
@@ -3303,5 +3304,4 @@ fun DropdownField(
             }
         }
     }
-}
 }
