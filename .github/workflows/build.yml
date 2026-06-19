@@ -4801,6 +4801,11 @@ jobs:
               fi
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=local $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+              echo "=== out 目录大小 ==="
+              du -sh out 2>/dev/null || echo "no out"
+              echo "=== out/cache 目录 ==="
+              du -sh out/cache 2>/dev/null || echo "no out/cache"
+              ls -l out/cache 2>/dev/null || echo "no out/cache"
             fi
             echo "内核编译完成！"
   
