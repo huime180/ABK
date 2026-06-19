@@ -148,6 +148,7 @@ data class MainUiState(
     val stockConfigExtracting: Boolean = false,
     val stockConfigLastPath: String? = null,
     val stockConfigError: String? = null,
+    val stockConfigPendingPush: Boolean = false,
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -832,31 +833,59 @@ class MainViewModel @JvmOverloads constructor(
     ) {
         _uiState.update {
             it.copy(stockConfigLastPath = result.configPath,
-                stockConfigError = if (result.success) null else result.output.lastOrNull())
+                stockConfigExtracting = false,
+                stockConfigError = if (result.success) null else result.output.lastOrNull(),
+                stockConfigPendingPush = result.success && result.configPath != null
+            )
         }
-        if (!result.success || result.configPath == null) {
-            _uiState.update { it.copy(stockConfigExtracting = false) }
-            return
-        }
-        // Push to fork
-        val token = prefs.accessToken.first() ?: ""
-        if (token.isNotBlank()) {
+    }
+
+    fun confirmPushStockConfig() {
+        val path = _uiState.value.stockConfigLastPath ?: return
+        _uiState.update { it.copy(stockConfigPendingPush = false, stockConfigExtracting = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val token = prefs.accessToken.first() ?: ""
             val owner = _uiState.value.forkRepo?.owner?.login ?: _uiState.value.user?.login ?: ""
             val repo = _uiState.value.forkRepo?.name ?: ""
             val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
-            if (owner.isNotBlank() && repo.isNotBlank()) {
-                val pushed = StockConfigManager.pushToFork(app, token, owner, repo, branch, deviceId)
+            val device = _uiState.value.stockConfigDeviceInfo?.configId ?: ""
+            val pushed = if (token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank()) {
+                StockConfigManager.pushToFork(app, token, owner, repo, branch, device)
+            } else false
+            _uiState.update {
+                it.copy(stockConfigExtracting = false,
+                    stockConfigError = if (pushed) null else "推送失败")
+            }
+        }
+    }
+
+    fun cancelPushStockConfig() {
+        _uiState.update { it.copy(stockConfigPendingPush = false) }
+    }
+
+    fun fetchStockConfigFromUpstream() {
+        if (_uiState.value.stockConfigExtracting) return
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.fetchFromUpstream(app, device.configId)
                 _uiState.update {
                     it.copy(
                         stockConfigExtracting = false,
                         stockConfigLastPath = result.configPath,
-                        stockConfigError = if (pushed) null else "提取成功，推送仓库失败"
+                        stockConfigError = if (result.success) null else "上游仓库中未找到该机型的 stock_config"
                     )
                 }
-                return
+                if (result.success && result.configPath != null) {
+                    applyDeviceToConfig(device.configId)
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
             }
         }
-        _uiState.update { it.copy(stockConfigExtracting = false) }
     }
 
     fun setRuntimeNavigationEnabled(enabled: Boolean) = runtime.setRuntimeNavigationEnabled(enabled)

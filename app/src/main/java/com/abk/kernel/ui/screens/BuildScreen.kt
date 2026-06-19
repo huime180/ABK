@@ -3132,11 +3132,23 @@ private fun StockConfigContent(
     Spacer(Modifier.height(8.dp))
 
     // ── Extract & push section ──────────────────────────────────────
-    Text(
-        text = "提取并推送 config 到当前 fork 的 ABK 仓库",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "提取并推送 config",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(
+            onClick = { vm.fetchStockConfigFromUpstream() },
+            enabled = !isExtracting,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("恢复", style = MaterialTheme.typography.labelSmall)
+        }
+    }
     Spacer(Modifier.height(6.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         // ── /proc/config ──
@@ -3182,9 +3194,29 @@ private fun StockConfigContent(
         )
     }
 
+    // ── Push confirmation dialog ───────────────────────────────────
+    if (state.stockConfigPendingPush) {
+        AlertDialog(
+            onDismissRequest = { vm.cancelPushStockConfig() },
+            icon = { Icon(Icons.Default.CloudUpload, null) },
+            title = { Text("确认推送") },
+            text = { Text("已提取 stock_config，是否推送到当前 fork 的 ABK 仓库？") },
+            confirmButton = {
+                Button(onClick = { vm.confirmPushStockConfig() }) {
+                    Text("推送")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.cancelPushStockConfig() }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // ── Push success indicator ──────────────────────────────────────
     state.stockConfigLastPath?.let { path ->
-        if (!isExtracting) {
+        if (!isExtracting && !state.stockConfigPendingPush) {
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))

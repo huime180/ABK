@@ -162,20 +162,28 @@ object StockConfigManager {
         val output = mutableListOf<String>()
         fun log(m: String) { output.add(m); onOutput?.invoke(m); Log.d(TAG, m) }
 
-        val workDir = File(context.cacheDir, "stock-bootimg"); workDir.deleteRecursively(); workDir.mkdirs()
+        // 时间戳独立 workDir，避免与 /proc/config 提取残留混淆
+        val workDir = File(context.cacheDir, "stock-bootimg-${System.currentTimeMillis()}")
+        workDir.mkdirs()
         val configDir = File(context.filesDir, STOCK_CONFIG_DIR); configDir.mkdirs()
 
         try {
             log("从 boot.img 提取 $targetId …")
             val magiskboot = listOf(
-                File(context.applicationInfo.nativeLibraryDir, "libmagiskboot.so"),
-                File("/data/local/tmp/magiskboot"),
                 File("/data/adb/ksud/bin/magiskboot"),
-            ).firstOrNull { it.isFile }
+                File("/data/local/tmp/magiskboot"),
+                File(context.applicationInfo.nativeLibraryDir, "libmagiskboot.so"),
+            ).firstOrNull { it.isFile && it.canRead() }
             if (magiskboot == null) {
-                log("未找到 magiskboot，回退到 /proc/config …")
-                return extractFromProcConfig(context, targetId, onOutput)
+                log("未找到 magiskboot (需要 libmagiskboot.so 或 /data/adb/ksud/bin/magiskboot)")
+                workDir.deleteRecursively()
+                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
             }
+
+            // 复制到 workDir 内执行，规避 SELinux/Playland 限制
+            val localMb = File(workDir, "magiskboot")
+            magiskboot.copyTo(localMb, overwrite = true)
+            localMb.setExecutable(true)
 
             val bootImg = File(workDir, "boot.img")
             val srcP = sq(bootImagePath)
@@ -187,17 +195,25 @@ object StockConfigManager {
             }
             RootUtils.execRootCommandForWebUi(cpSc, timeoutSeconds = 30L)
 
-            val mb = sq(magiskboot.absolutePath)
+            if (!bootImg.isFile || bootImg.length() == 0L) {
+                log("boot.img 复制失败")
+                workDir.deleteRecursively()
+                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
+            }
+
+            val mb = sq(localMb.absolutePath)
             val wk = sq(workDir.absolutePath)
             val unpackSc = buildString {
                 appendLine("cd $wk")
-                appendLine("$mb unpack boot.img")
-                appendLine("[ -f $wk/kernel ] && $mb extract $wk/kernel || true")
-                appendLine("[ -f $wk/kconfig ] || exit 3")
+                // 清理可能残留的旧文件
+                appendLine("rm -f $wk/kernel $wk/kconfig $wk/kernel_dtb 2>/dev/null || true")
+                appendLine("$mb unpack boot.img 2>&1 || { echo 'magiskboot unpack failed'; exit 3; }")
+                appendLine("[ -f $wk/kernel ] && { $mb extract $wk/kernel 2>&1 || echo 'magiskboot extract skipped'; } || echo 'no kernel file found'")
             }
             val unpackRes = RootUtils.execRootCommandForWebUi(unpackSc, timeoutSeconds = 120L)
             output.addAll(unpackRes.output.filter { it.isNotBlank() })
 
+            // 严格读取本次 workDir 内的 kconfig
             val kconfig = File(workDir, "kconfig")
             val destFile = File(configDir, "$targetId$STOCK_CONFIG_SUFFIX")
             if (kconfig.isFile && kconfig.readText().contains("CONFIG_")) {
@@ -205,20 +221,24 @@ object StockConfigManager {
                     appendLine("# Stock Kernel Config")
                     appendLine("# Device: ${deviceInfo.model}")
                     appendLine("# Config ID: $targetId")
-                    appendLine("# Source: boot.img")
+                    appendLine("# Source: boot.img ($bootImagePath)")
                     appendLine("# Extracted: ${now()}")
                     appendLine()
                 })
                 kconfig.forEachLine { if (it.trim().startsWith("CONFIG_")) destFile.appendText(it.trim() + "\n") }
                 log("提取成功: ${destFile.absolutePath}")
+            } else {
+                log("magiskboot 未能提取内核配置")
+                workDir.deleteRecursively()
+                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
             }
             workDir.deleteRecursively()
-            val ok = destFile.isFile && destFile.readText().contains("CONFIG_")
-            return StockConfigResult(ok, deviceInfo, destFile.takeIf { ok }?.absolutePath, output)
+            return StockConfigResult(true, deviceInfo, destFile.absolutePath, output)
         } catch (e: Exception) {
             Log.e(TAG, "bootimg extract failed", e)
             workDir.deleteRecursively()
-            return StockConfigResult(false, deviceInfo, null, output + (e.message ?: "失败"))
+            log("异常: ${e.message}")
+            return StockConfigResult(false, deviceInfo, null, output, "bootimg")
         }
     }
 
@@ -296,6 +316,64 @@ object StockConfigManager {
             }
             temp.takeIf { it.isFile && it.length() > 0L }?.absolutePath
         } catch (e: Exception) { Log.e(TAG, "copyUri", e); null }
+    }
+
+    // ── Fetch from upstream repository ───────────────────────────────────
+
+    const val UPSTREAM_OWNER = "xingguangcuican6666"
+    const val UPSTREAM_REPO = "ABK"
+    const val UPSTREAM_BRANCH = "main"
+
+    fun fetchFromUpstream(
+        context: Context,
+        deviceId: String,
+        onOutput: ((String) -> Unit)? = null
+    ): StockConfigResult {
+        val deviceInfo = detectDevice()
+        val targetId = deviceId.trim().takeIf { it.isNotBlank() } ?: deviceInfo.configId
+        val output = mutableListOf<String>()
+        fun log(m: String) { output.add(m); onOutput?.invoke(m); Log.d(TAG, m) }
+
+        val configDir = File(context.filesDir, STOCK_CONFIG_DIR); configDir.mkdirs()
+        val destFile = File(configDir, "$targetId$STOCK_CONFIG_SUFFIX")
+
+        try {
+            val fileName = "$targetId$STOCK_CONFIG_SUFFIX"
+            val url = "https://raw.githubusercontent.com/$UPSTREAM_OWNER/$UPSTREAM_REPO/$UPSTREAM_BRANCH/$STOCK_CONFIG_DIR/$fileName"
+            log("从上游仓库获取: $url")
+
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.connectTimeout = 10_000; conn.readTimeout = 20_000
+            conn.setRequestProperty("User-Agent", "ABK-Android")
+
+            if (conn.responseCode != 200) {
+                log("上游仓库中未找到 $fileName (HTTP ${conn.responseCode})")
+                conn.disconnect()
+                return StockConfigResult(false, deviceInfo, null, output, "upstream")
+            }
+
+            val content = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+
+            if (!content.contains("CONFIG_")) {
+                log("上游文件内容无效")
+                return StockConfigResult(false, deviceInfo, null, output, "upstream")
+            }
+
+            val finalContent = if (content.trimStart().startsWith("#")) content else buildString {
+                appendLine("# Stock Kernel Config for $targetId")
+                appendLine("# Fetched from upstream: $UPSTREAM_OWNER/$UPSTREAM_REPO")
+                appendLine("# Date: ${now()}")
+                appendLine()
+                append(content)
+            }
+            destFile.writeText(finalContent)
+            log("从上游仓库恢复成功: $targetId")
+            return StockConfigResult(true, deviceInfo, destFile.absolutePath, output, "upstream")
+        } catch (e: Exception) {
+            log("网络错误: ${e.message}")
+            return StockConfigResult(false, deviceInfo, null, output, "upstream")
+        }
     }
 
     // ── Cached configs ──────────────────────────────────────────────────
