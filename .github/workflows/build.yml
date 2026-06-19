@@ -126,6 +126,10 @@ on:
         required: false
         type: boolean
         default: true
+      stock_config:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-kernel:
@@ -955,13 +959,14 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-      - name: 应用 Stock Config 伪装
+      - name: 应用 Stock Config
+        if: inputs.stock_config != ''
         run: |
-          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
+          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_config/${{ inputs.stock_config }}_stock_config"
           STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
 
           if [ ! -f "$STOCK_SRC" ]; then
-            echo "未检测到 $STOCK_SRC，跳过 Stock Config 伪装。"
+            echo "::warning::未找到 $STOCK_SRC，跳过 Stock Config 伪装。"
             exit 0
           fi
 
@@ -970,7 +975,7 @@ jobs:
             echo "::error::复制 stock_defconfig 失败: $STOCK_SRC -> $STOCK_DST"
             exit 1
           fi
-          echo "已复制 stock_defconfig -> $STOCK_DST"
+          echo "已复制 ${{ inputs.stock_config }}_stock_config -> $STOCK_DST"
 
           NEW_RULE='$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE'
           OLD_RULE='$(obj)/config_data: $(KCONFIG_CONFIG) FORCE'

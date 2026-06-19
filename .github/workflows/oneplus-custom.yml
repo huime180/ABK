@@ -129,6 +129,11 @@ on:
         required: false
         type: boolean
         default: false
+      stock_config:
+        description: "Stock Config 机型代号（从 config/stock_config/<代号>_stock_config 加载）"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   get-manager:
@@ -156,3 +161,4 @@ jobs:
       use_bbr: ${{ inputs.use_bbr }}
       use_proxy_optimization: ${{ inputs.use_proxy_optimization }}
       use_unicode_bypass: ${{ inputs.use_unicode_bypass }}
+      stock_config: ${{ inputs.stock_config || '' }}

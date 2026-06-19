@@ -89,14 +89,10 @@ import com.abk.kernel.ui.theme.uiSurfaceColor
 import com.abk.kernel.viewmodel.BuildPlanImportPreview
 import com.abk.kernel.viewmodel.BuildPlanShareScope
 import com.abk.kernel.viewmodel.MainViewModel
-import com.abk.kernel.utils.StockConfigManager
 import coil.compose.AsyncImage
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -3087,375 +3083,129 @@ private fun StockConfigContent(
 ) {
     val deviceInfo = state.stockConfigDeviceInfo
     val isExtracting = state.stockConfigExtracting
-    val extractMethod = state.stockConfigExtractMethod
+    val needLogin = state.isLoggedIn && state.forkRepo != null
+    val isEnabled = state.buildConfig.stockConfigEnabled
+    val configId = deviceInfo?.configId ?: ""
 
-    // File picker for boot.img (method 2)
+    // Auto-detect device on first load
+    LaunchedEffect(Unit) {
+        if (deviceInfo == null) vm.detectDeviceModel()
+    }
+
+    // File picker for boot.img
     val bootImgPicker = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
-        uri?.let { vm.extractStockConfigFromBootImageUri(it) }
+        uri?.let { vm.extractFromBootImage(it) }
     }
 
-    // Expandable state for each method section
-    var method1Expanded by rememberSaveable { mutableStateOf(false) }
-    var method2Expanded by rememberSaveable { mutableStateOf(false) }
-    var method3Expanded by rememberSaveable { mutableStateOf(false) }
-    var showOutput by rememberSaveable { mutableStateOf(false) }
-
-    // ── Device Info ──────────────────────────────────────────────────
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (deviceInfo != null) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = deviceInfo.displayName,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "${deviceInfo.manufacturer} · ${deviceInfo.product} · ${deviceInfo.board}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (deviceInfo.matchedManifest != null) {
-                    Text(
-                        text = "已匹配: ${deviceInfo.matchedManifest}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-        }
-        FilledTonalIconButton(
-            onClick = { vm.detectDeviceModel() },
-            enabled = !isExtracting,
-            modifier = Modifier.size(36.dp)
+    // ── Device info card ────────────────────────────────────────────
+    if (deviceInfo != null) {
+        ExpressiveSectionCard(
+            title = "当前设备: ${deviceInfo.displayName}",
+            subtitle = "${deviceInfo.manufacturer} · ${deviceInfo.product} · ${deviceInfo.board}\n指纹: ${deviceInfo.fingerprint}",
+            icon = Icons.Default.PhoneAndroid
         ) {
-            Icon(Icons.Default.Search, "识别", modifier = Modifier.size(18.dp))
+            // Toggle: apply stock_config
+            SwitchRow(
+                label = "应用 stock_config",
+                checked = isEnabled,
+                onCheckedChange = { vm.toggleStockConfig(it) }
+            )
+            if (isEnabled) {
+                Text(
+                    text = "构建时将自动从当前 fork 的 ABK 仓库 config/stock_config/ 目录应用 ${configId}_stock_config",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
+    } else {
+        // Loading state
+        ExpressiveSectionCard(
+            title = "识别设备中…",
+            subtitle = "正在获取本机型号信息",
+            icon = Icons.Default.PhoneAndroid
+        ) { }
     }
 
     Spacer(Modifier.height(8.dp))
 
-    // ── Method 1: /proc/config ───────────────────────────────────────
-    val needLogin = state.isLoggedIn && state.forkRepo != null
-    MethodHeader(
-        icon = Icons.Default.Terminal,
-        label = "方式1: 从本机 /proc/config 提取",
-        desc = if (needLogin) "读取 /proc/config.gz，提取后自动推送至 fork 仓库"
-               else "读取 /proc/config.gz（需要先登录 GitHub 并 fork 仓库）",
-        expanded = method1Expanded,
-        onToggle = { method1Expanded = !method1Expanded },
-        active = extractMethod == "proc"
+    // ── Extract & push section ──────────────────────────────────────
+    Text(
+        text = "提取并推送 config 到当前 fork 的 ABK 仓库",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    AnimatedVisibility(visible = method1Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            if (!needLogin) {
-                Text(
-                    text = "需要先完成 GitHub 登录并 fork 仓库，提取后将自动推送到 fork 的 config/stock_config/ 目录。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            } else {
-                Text(
-                    text = "直接读取 /proc/config.gz，提取后自动 force push 到 ${state.user?.login}/${state.forkRepo?.name} 的 config/stock_config/ 目录。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = {
-                    method1Expanded = false; showOutput = true
-                    vm.extractStockConfigFromProc()
-                },
-                modifier = Modifier.fillMaxWidth().height(44.dp),
-                enabled = needLogin && !isExtracting
-            ) {
-                Icon(
-                    if (extractMethod == "proc" && isExtracting) Icons.Default.Refresh else Icons.Default.Download,
-                    null, modifier = Modifier.size(17.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(if (extractMethod == "proc" && isExtracting) "提取中…" else "从 /proc/config 提取")
-            }
-        }
-    }
-
     Spacer(Modifier.height(6.dp))
-
-    // ── Method 2: boot.img file ──────────────────────────────────────
-    MethodHeader(
-        icon = Icons.Default.Archive,
-        label = "方式2: 从 boot.img 文件提取",
-        desc = if (needLogin) "选择 boot.img 用 magiskboot 解包，提取后推送"
-               else "选择 boot.img 解包提取（需要先登录 fork + root）",
-        expanded = method2Expanded,
-        onToggle = { method2Expanded = !method2Expanded },
-        active = extractMethod == "bootimg"
-    )
-    AnimatedVisibility(visible = method2Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            if (!needLogin) {
-                Text(
-                    text = "需要先完成 GitHub 登录并 fork 仓库。提取后将自动推送到 fork 的 config/stock_config/ 目录。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            } else {
-                Text(
-                    text = "选择 boot.img 文件，使用 magiskboot 解包提取 kconfig。提取后自动推送到 ${state.user?.login}/${state.forkRepo?.name}。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = {
-                    method2Expanded = false; showOutput = true
-                    bootImgPicker.launch(arrayOf("*/*"))
-                },
-                modifier = Modifier.fillMaxWidth().height(44.dp),
-                enabled = needLogin && rootGranted && !isExtracting
-            ) {
-                Icon(
-                    if (extractMethod == "bootimg" && isExtracting) Icons.Default.Refresh else Icons.Default.FolderOpen,
-                    null, modifier = Modifier.size(17.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    if (extractMethod == "bootimg" && isExtracting) "提取中…"
-                    else if (!rootGranted) "需要 Root 权限"
-                    else "选择 boot.img 文件并提取"
-                )
-            }
-        }
-    }
-
-    Spacer(Modifier.height(6.dp))
-
-    // ── Method 3: Repository ─────────────────────────────────────────
-    MethodHeader(
-        icon = Icons.Default.CloudDownload,
-        label = "方式3: 从远程仓库获取",
-        desc = "从上游仓库 config/stock_config/ 下载对应机型的配置",
-        expanded = method3Expanded,
-        onToggle = { method3Expanded = !method3Expanded },
-        active = extractMethod == "repo"
-    )
-    AnimatedVisibility(visible = method3Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-        Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            val targetId = deviceInfo?.configId ?: ""
-            val repoOwner = state.forkRepo?.owner?.login ?: state.user?.login ?: "unknown"
-            val repoName = state.forkRepo?.name ?: "ABK"
-            Text(
-                text = "从 $repoOwner/$repoName 仓库的 config/stock_config/ 目录拉取 ${targetId}_stock_config。无需登录即可使用。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = {
-                    method3Expanded = false; showOutput = true
-                    vm.fetchStockConfigFromRepo(targetId)
-                },
-                modifier = Modifier.fillMaxWidth().height(44.dp),
-                enabled = targetId.isNotBlank() && !isExtracting
-            ) {
-                Icon(
-                    if (extractMethod == "repo" && isExtracting) Icons.Default.Refresh else Icons.Default.CloudDownload,
-                    null, modifier = Modifier.size(17.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(if (extractMethod == "repo" && isExtracting) "下载中…" else "从仓库获取 ${targetId}_stock_config")
-            }
-        }
-    }
-
-    // ── Extraction output log ────────────────────────────────────────
-    if (state.stockConfigOutput.isNotEmpty()) {
-        Spacer(Modifier.height(8.dp))
-        TextButton(
-            onClick = { showOutput = !showOutput },
-            modifier = Modifier.fillMaxWidth()
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ── /proc/config ──
+        OutlinedButton(
+            onClick = { vm.extractFromProc() },
+            modifier = Modifier.weight(1f).height(42.dp),
+            enabled = needLogin && !isExtracting
         ) {
             Icon(
-                if (showOutput) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                if (isExtracting) Icons.Default.Refresh else Icons.Default.Terminal,
                 null, modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(4.dp))
-            Text(if (showOutput) "隐藏输出" else "显示输出 (${state.stockConfigOutput.size} 行)")
+            Text(
+                if (isExtracting) "提取中…" else "/proc/config",
+                style = MaterialTheme.typography.labelMedium
+            )
         }
-        AnimatedVisibility(visible = showOutput, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 200.dp)
-                        .verticalScroll(rememberScrollState())
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    state.stockConfigOutput.takeLast(15).forEach { line ->
-                        val isError = line.contains("✗") || line.contains("失败") || line.contains("failed")
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isError) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Error display ────────────────────────────────────────────────
-    state.stockConfigError?.let { error ->
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(text = error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-    }
-
-    // ── Last path / success ──────────────────────────────────────────
-    state.stockConfigLastPath?.let { path ->
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+        // ── boot.img ──
+        OutlinedButton(
+            onClick = { bootImgPicker.launch(arrayOf("*/*")) },
+            modifier = Modifier.weight(1f).height(42.dp),
+            enabled = needLogin && rootGranted && !isExtracting
+        ) {
+            Icon(Icons.Default.Archive, null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))
             Text(
-                text = path,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                if (!rootGranted) "需要 Root"
+                else if (isExtracting) "提取中…"
+                else "boot.img",
+                style = MaterialTheme.typography.labelMedium
             )
         }
     }
 
-    // ── Cached configs ───────────────────────────────────────────────
-    val cachedConfigs = state.cachedStockConfigs
-    if (cachedConfigs.isNotEmpty()) {
-        Spacer(Modifier.height(10.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(Modifier.height(10.dp))
+    // ── Login needed warning ────────────────────────────────────────
+    if (!needLogin && deviceInfo != null) {
+        Spacer(Modifier.height(4.dp))
         Text(
-            text = "已缓存的 stock_config",
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.SemiBold
+            text = "需要登录 GitHub 并 fork 仓库才能提取和推送 config",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
         )
-        Spacer(Modifier.height(6.dp))
-        cachedConfigs.take(6).forEach { file ->
-            val configId = StockConfigManager.configIdFromFile(file)
-            val isSelected = configId == state.buildConfig.stockConfig
-            OutlinedButton(
-                onClick = { vm.applyStockConfigToBuildConfig(configId) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = if (isSelected) ButtonDefaults.outlinedButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ) else ButtonDefaults.outlinedButtonColors()
-            ) {
-                Icon(
-                    if (isSelected) Icons.Default.CheckCircle else Icons.Default.Description,
-                    null, modifier = Modifier.size(16.dp),
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(6.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = configId, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        text = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(file.lastModified())),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-        if (state.buildConfig.stockConfig.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            TextButton(
-                onClick = { vm.clearStockConfig() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Close, null, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("取消使用 stock_config")
-            }
-        }
     }
-}
 
-@Composable
-private fun MethodHeader(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    desc: String,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    active: Boolean
-) {
-    val bgColor = if (active) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-    }
-    Surface(
-        onClick = onToggle,
-        shape = RoundedCornerShape(10.dp),
-        color = bgColor,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                icon, null,
-                tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
-                )
-                Text(
-                    text = desc,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2
-                )
-            }
-            Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
-            if (active) {
-                Spacer(Modifier.width(4.dp))
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp
-                )
+    // ── Push success indicator ──────────────────────────────────────
+    state.stockConfigLastPath?.let { path ->
+        if (!isExtracting) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("推送成功", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }
+    }
+
+    // ── Error ───────────────────────────────────────────────────────
+    state.stockConfigError?.let { error ->
+        if (!isExtracting) {
+            Spacer(Modifier.height(4.dp))
+            Text(text = error, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+
+    // ── Loading ─────────────────────────────────────────────────────
+    if (isExtracting) {
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
     }
 }
 

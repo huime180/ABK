@@ -1219,6 +1219,6 @@
     <string name="gh_root_must_be_object">根节点必须是 JSON 对象</string>
     <string name="gh_missing_module_name">缺少 ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">模块仓库</string>
-    <string name="build_stock_config_title">机型识别 &amp; Stock Config</string>
-    <string name="build_stock_config_desc">① 从 /proc/config 读取 (需登录+fork) ② 从 boot.img 解包 (需登录+fork+root) ③ 从远程仓库获取 (无需登录)。提取后自动推送到 fork 仓库的 config/stock_config/ 目录。</string>
+    <string name="build_stock_config_title">Stock Config</string>
+    <string name="build_stock_config_desc">根据机型应用 stock_config；也可自行识别本机或 boot 镜像中的 config 并推送到仓库。</string>
 </resources>

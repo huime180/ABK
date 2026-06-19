@@ -172,6 +172,11 @@ on:
         required: false
         type: string
         default: ""
+      stock_config:
+        description: "Stock Config 机型代号（从 config/stock_config/<代号>_stock_config 加载）"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build-custom-kernel:
@@ -204,6 +209,7 @@ jobs:
       zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
+      stock_config: ${{ inputs.stock_config || '' }}
 
   get-ksu-manager:
     uses: ./.github/workflows/get-manager.yml

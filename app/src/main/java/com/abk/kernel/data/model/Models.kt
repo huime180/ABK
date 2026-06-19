@@ -607,6 +607,7 @@ data class KernelBuildConfig(
     val onePlusUseBbr: Boolean = false,
     val onePlusUseProxyOptimization: Boolean = true,
     val onePlusUseUnicodeBypass: Boolean = false,
+    val stockConfigEnabled: Boolean = false,
     val stockConfig: String = ""
 )
 
