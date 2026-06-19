@@ -2465,7 +2465,6 @@ jobs:
           echo "虚拟化支持集成完成"
 
       - name: 应用 Unicode 绕过修复
-        if: inputs.enable_susfs
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           if [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
