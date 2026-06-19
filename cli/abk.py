@@ -10,6 +10,31 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
+import zipfile
+import hashlib
+import base64
+
+# Crypto backend: prefer cryptography (fastest), fall back to pycryptodome (std lib)
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.exceptions import InvalidSignature
+    _CRYPTO_BACKEND = 'cryptography'
+except ImportError:
+    try:
+        from Cryptodome.PublicKey import RSA
+        from Cryptodome.Signature import pkcs1_15
+        from Cryptodome.Hash import SHA256
+        _CRYPTO_BACKEND = 'pycryptodome'
+    except ImportError:
+        _CRYPTO_BACKEND = None
+
+# PyInstaller bundle: point SSL certs to certifi if available
+try:
+    import certifi
+    os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+except ImportError:
+    pass
 
 sys.path.insert(0, str(Path(__file__).parent))
 from i18n import t, load_translations, detect_language
@@ -557,6 +582,159 @@ class GitHubClient:
             "needs_sync": behind.get("behind_by", 0) > 0
         }
 
+    def _api_url(self, path):
+        return f"{GITHUB_API}/repos/{self.repo}/{path.lstrip('/')}"
+
+    def get_repo_public_key(self):
+        url = self._api_url("actions/secrets/public-key")
+        req = Request(url, headers={
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ABK-CLI",
+        })
+        with urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    def create_or_update_secret(self, secret_name, secret_value):
+        pub = self.get_repo_public_key()
+        import nacl.bindings
+        key_bytes = base64.b64decode(pub['key'])
+        encrypted = nacl.bindings.crypto_box_seal(secret_value.encode(), key_bytes)
+        encrypted_b64 = base64.b64encode(encrypted).decode()
+        data = json.dumps({
+            "encrypted_value": encrypted_b64,
+            "key_id": pub['key_id'],
+        }).encode()
+        url = self._api_url(f"actions/secrets/{secret_name}")
+        req = Request(url, data=data, method='PUT', headers={
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ABK-CLI",
+            "Content-Type": "application/json",
+        })
+        with urlopen(req, timeout=30) as resp:
+            return resp.status in (201, 204)
+
+
+def get_signing_key():
+    """Load signing public key from config."""
+    config = load_config()
+    return config.get("signing_key") or os.environ.get("ABK_SIGNING_KEY")
+
+
+def generate_signing_keypair():
+    """Generate RSA-2048 keypair for artifact signing."""
+    if _CRYPTO_BACKEND == 'cryptography':
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key_pem = key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+    else:
+        key = RSA.generate(2048)
+        public_key_pem = key.publickey().export_key('PEM').decode()
+    return public_key_pem
+
+
+def ensure_signing_key(client):
+    """Generate signing key if missing, then upload public key to fork secrets."""
+    config = load_config()
+    existing = config.get("signing_key") or os.environ.get("ABK_SIGNING_KEY")
+    if existing:
+        return existing
+    if not client.token:
+        return None
+    print(t("signing_key_generating"))
+    public_key_pem = generate_signing_keypair()
+    fork = client.get_fork()
+    if fork:
+        try:
+            client.create_or_update_secret("ABK_ARTIFACT_SIGNING_PUBLIC_KEY", public_key_pem)
+        except Exception:
+            pass
+    config["signing_key"] = public_key_pem
+    save_config(config)
+    print(t("signing_key_generated"))
+    return public_key_pem
+
+
+def verify_artifact_bundle(bundle_path, public_key_pem=None):
+    """
+    Verify a signed artifact bundle.
+    Mirrors ArtifactVerification.verifyBundleFile from the Android app.
+    
+    Returns dict with keys:
+        verified (bool): True if fully verified
+        status (str): 'verified' | 'legacy' | 'unverified' | 'no_key' | 'skip' | 'error'
+        message (str): Human-readable result
+    """
+    if not bundle_path.lower().endswith('.zip'):
+        return {'verified': False, 'status': 'skip', 'message': t("artifact_verify_skip")}
+    
+    try:
+        with zipfile.ZipFile(bundle_path, 'r') as z:
+            names = z.namelist()
+            
+            if 'ABK_BUNDLE_MANIFEST.json' not in names:
+                return {'verified': False, 'status': 'skip', 'message': t("artifact_verify_skip")}
+            
+            manifest_bytes = z.read('ABK_BUNDLE_MANIFEST.json')
+            
+            try:
+                manifest = json.loads(manifest_bytes)
+            except json.JSONDecodeError:
+                return {'verified': False, 'status': 'legacy', 'message': t("artifact_legacy_warning")}
+            
+            if 'ABK_BUNDLE_MANIFEST.sig' not in names:
+                return {'verified': False, 'status': 'legacy', 'message': t("artifact_legacy_warning")}
+            
+            sig_bytes = z.read('ABK_BUNDLE_MANIFEST.sig')
+            
+            if not public_key_pem:
+                return {'verified': False, 'status': 'no_key', 'message': t("artifact_verify_no_key")}
+            if not _CRYPTO_BACKEND:
+                return {'verified': False, 'status': 'no_key', 'message': t("artifact_verify_no_key")}
+
+            if _CRYPTO_BACKEND == 'cryptography':
+                try:
+                    pub = serialization.load_pem_public_key(public_key_pem.encode())
+                except Exception:
+                    return {'verified': False, 'status': 'no_key', 'message': t("artifact_verify_no_key")}
+                try:
+                    pub.verify(sig_bytes, manifest_bytes, padding.PKCS1v15(), hashes.SHA256())
+                except InvalidSignature:
+                    return {'verified': False, 'status': 'unverified', 'message': t("artifact_unverified_warning")}
+            else:
+                # pycryptodome backend
+                try:
+                    pub = RSA.import_key(public_key_pem)
+                    h = SHA256.new(manifest_bytes)
+                    pkcs1_15.new(pub).verify(h, sig_bytes)
+                except (ValueError, TypeError):
+                    return {'verified': False, 'status': 'unverified', 'message': t("artifact_unverified_warning")}
+            
+            # Verify payload integrity
+            payload_name = manifest.get('payload_name', '')
+            expected_sha256 = manifest.get('payload_sha256', '').strip().lower()
+            
+            if payload_name and expected_sha256 and payload_name in names:
+                payload_bytes = z.read(payload_name)
+                actual_sha256 = hashlib.sha256(payload_bytes).hexdigest()
+                if actual_sha256 != expected_sha256:
+                    return {
+                        'verified': False,
+                        'status': 'unverified',
+                        'message': t("artifact_unverified_warning")
+                    }
+            
+            return {'verified': True, 'status': 'verified', 'message': t("artifact_verified_ok")}
+    
+    except zipfile.BadZipFile:
+        return {'verified': False, 'status': 'error', 'message': 'Invalid zip file'}
+    except Exception as e:
+        return {'verified': False, 'status': 'error', 'message': f'Verification error: {e}'}
+
 
 def cmd_login(args):
     token = device_flow_login()
@@ -661,6 +839,7 @@ def cmd_fork(args):
             print(t("fork_creating"))
             result = client.create_fork()
             print(t("fork_created", fork=result.get('full_name')))
+        ensure_signing_key(client)
     except Exception as e:
         print(t("err_fork_failed", error=e), file=sys.stderr)
         sys.exit(1)
@@ -689,6 +868,7 @@ def cmd_sync(args):
         print(t("syncing_n_commits", n=behind['behind_by']))
         client.sync_fork()
         print(t("fork_sync_done"))
+        ensure_signing_key(client)
     except Exception as e:
         print(t("err_sync_failed", error=e), file=sys.stderr)
         sys.exit(1)
@@ -992,6 +1172,14 @@ def cmd_artifacts(args):
     
     client = GitHubClient(token=token)
 
+    if args.set_download_dir:
+        config = load_config()
+        config["download_dir"] = args.set_download_dir
+        save_config(config)
+        print(t("download_dir_saved", dir=args.set_download_dir))
+        if not args.run_id and not args.download:
+            return
+
     if not args.run_id:
         print(t("err_need_run_id"), file=sys.stderr)
         sys.exit(1)
@@ -1008,14 +1196,26 @@ def cmd_artifacts(args):
             print(f"  {art['id']} | {art['name']} | {size_kb:.1f} KB")
 
         if args.download:
-            output_dir = args.output or "."
+            config = load_config()
+            output_dir = args.output or config.get("download_dir") or str(Path.home() / "Downloads")
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             print(f"\n" + t("artifacts_download_to", dir=output_dir))
+            signing_key = get_signing_key()
             for art in artifacts["artifacts"]:
                 print(f"  " + t("artifacts_downloading", name=art["name"]))
                 path = client.download_artifact(art["id"], output_dir)
                 if path:
                     print(f"    -> {path}")
+                    print(f"    " + t("artifact_verifying"))
+                    result = verify_artifact_bundle(path, signing_key)
+                    status_icon = "✓" if result['verified'] else "⚠"
+                    print(f"    {status_icon} {result['message']}")
+                    if not result['verified']:
+                        sys.stdout.write("    " + t("artifact_verify_confirm"))
+                        sys.stdout.flush()
+                        answer = sys.stdin.readline().strip().lower()
+                        if answer not in ('y', 'yes', 'j', 'ja', 'o', 'oui', 's', 'si', 'sí'):
+                            print(f"    {t('artifact_verify_skip_user')}")
     except Exception as e:
         print(t("err_fork_failed", error=e), file=sys.stderr)
 
@@ -1184,6 +1384,7 @@ def main():
     artifacts_parser.add_argument("--run-id", type=int, help=t("arg_run_id"))
     artifacts_parser.add_argument("--download", action="store_true", help=t("arg_download"))
     artifacts_parser.add_argument("--output", "-o", help=t("arg_output"))
+    artifacts_parser.add_argument("--set-download-dir", metavar="DIR", help=t("arg_set_download_dir"))
     artifacts_parser.set_defaults(func=cmd_artifacts)
 
     # list

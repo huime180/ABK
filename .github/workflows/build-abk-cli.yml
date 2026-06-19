@@ -102,20 +102,58 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.python_arch }}
 
+      - name: Cache pip and cargo (cryptography Rust build)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target_id }}-pip-crypto-v3
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target_id }}-pip-crypto-
+        # Windows pip cache: ~\AppData\Local\pip\Cache — handled via different ~ mapping
+
+      - name: Ensure pip cache on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Pip cache location differs on Windows; ensure the cache dir exists
+          $pipCache = Join-Path $env:LOCALAPPDATA "pip\Cache"
+          if (-not (Test-Path $pipCache)) { New-Item -ItemType Directory -Force $pipCache | Out-Null }
+
       - name: Install build dependencies
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller certifi pycryptodome pynacl
+          python -m pip install cryptography 2>/dev/null || echo "::warning::cryptography unavailable, using pycryptodome"
+
+      - name: Install Rust (cryptography build dependency)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Rust is needed for cryptography's pyo3-based native build
+          if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Rust via rustup..."
+            Set-ExecutionPolicy Unrestricted -Scope Process -Force
+            & { iwr https://win.rustup.rs -UseBasicParsing | iex } -y --default-toolchain stable
+            $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+            [Environment]::SetEnvironmentVariable("Path", "$env:USERPROFILE\.cargo\bin;$env:Path", "User")
+          }
+          cargo --version
 
       - name: Install build dependencies
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller
+          python -m pip install setuptools-rust wheel pycryptodome pynacl
+          python -m pip install cryptography 2>&1 | Out-Null
+          if (-not $?) { Write-Warning "cryptography unavailable, using pycryptodome instead" }
+          python -m pip install pyinstaller certifi
 
       - name: Build native one-dir bundle
         if: ${{ matrix.target_id == 'linux-arm64' || matrix.target_id == 'linux-x64' || matrix.target_id == 'macos-arm64' || matrix.target_id == 'macos-x64' }}
@@ -128,6 +166,12 @@ jobs:
             --clean \
             --onedir \
             --name abk \
+            --hidden-import cryptography \
+            --hidden-import cryptography.hazmat.primitives \
+            --hidden-import cryptography.hazmat.primitives.asymmetric \
+            --hidden-import cryptography.hazmat.primitives.asymmetric.padding \
+            --hidden-import cryptography.hazmat.primitives.hashes \
+            --hidden-import cryptography.hazmat.backends.openssl \
             --add-data "cli/i18n:i18n" \
             cli/abk.py
 
@@ -142,6 +186,12 @@ jobs:
             --clean `
             --onedir `
             --name abk `
+            --hidden-import cryptography `
+            --hidden-import cryptography.hazmat.primitives `
+            --hidden-import cryptography.hazmat.primitives.asymmetric `
+            --hidden-import cryptography.hazmat.primitives.asymmetric.padding `
+            --hidden-import cryptography.hazmat.primitives.hashes `
+            --hidden-import cryptography.hazmat.backends.openssl `
             --add-data "cli/i18n;i18n" `
             cli/abk.py
 
@@ -181,12 +231,27 @@ jobs:
               apt-get update
               apt-get install -y build-essential zlib1g-dev
               python -m pip install --upgrade pip
-              python -m pip install pyinstaller
+              python -m pip install pyinstaller certifi pycryptodome pynacl
+              python -m pip install cryptography 2>/dev/null || echo "::warning::cryptography unavailable, using pycryptodome"
               pyinstaller \
                 --noconfirm \
                 --clean \
                 --onedir \
                 --name abk \
+                --hidden-import cryptography \
+                --hidden-import cryptography.hazmat.primitives \
+                --hidden-import cryptography.hazmat.primitives.asymmetric \
+                --hidden-import cryptography.hazmat.primitives.asymmetric.padding \
+                --hidden-import cryptography.hazmat.primitives.hashes \
+                --hidden-import cryptography.hazmat.backends.openssl \
+                --hidden-import certifi \
+                --collect-all certifi \
+                --hidden-import nacl \
+                --hidden-import nacl.bindings \
+                --hidden-import Cryptodome \
+                --hidden-import Cryptodome.PublicKey \
+                --hidden-import Cryptodome.Signature \
+                --hidden-import Cryptodome.Hash \
                 --add-data "cli/i18n:i18n" \
                 cli/abk.py
             '
@@ -208,12 +273,27 @@ jobs:
               apt-get update
               apt-get install -y build-essential zlib1g-dev
               python -m pip install --upgrade pip
-              python -m pip install pyinstaller
+              python -m pip install pyinstaller certifi pycryptodome pynacl
+              python -m pip install cryptography 2>/dev/null || echo "::warning::cryptography unavailable, using pycryptodome"
               pyinstaller \
                 --noconfirm \
                 --clean \
                 --onedir \
                 --name abk \
+                --hidden-import cryptography \
+                --hidden-import cryptography.hazmat.primitives \
+                --hidden-import cryptography.hazmat.primitives.asymmetric \
+                --hidden-import cryptography.hazmat.primitives.asymmetric.padding \
+                --hidden-import cryptography.hazmat.primitives.hashes \
+                --hidden-import cryptography.hazmat.backends.openssl \
+                --hidden-import certifi \
+                --collect-all certifi \
+                --hidden-import nacl \
+                --hidden-import nacl.bindings \
+                --hidden-import Cryptodome \
+                --hidden-import Cryptodome.PublicKey \
+                --hidden-import Cryptodome.Signature \
+                --hidden-import Cryptodome.Hash \
                 --add-data "cli/i18n:i18n" \
                 cli/abk.py
             '

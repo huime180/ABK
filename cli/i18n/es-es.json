@@ -220,6 +220,9 @@
   "op_features_title": "Funciones OnePlus:",
   "features_title": "Opciones:",
   "default_build_info": "Por defecto: build personalizado (kernel-custom.yml), requiere --sub-level y --os-patch-level",
+  "matrix_item_desc": "--matrix {k:9} - {name} (matriz de todos los subniveles)",
+  "oneplus_item_desc": "--oneplus        - Dispositivos OnePlus/Oplus (--device requerido)",
+  "custom_default_desc": "Por defecto: build personalizado (kernel-custom.yml), --sub-level y --os-patch-level requeridos",
   "workflow_404_hint": "Pista: 404 significa workflow no activado. Actívelo en la pestaña Actions",
   "arg_cancel": "Cancelar build en ejecución",
   "arg_rerun": "Re-ejecutar build completado",
@@ -227,5 +230,17 @@
   "cancel_fail": "Cancelación fallida: {error}",
   "rerun_ok": "Build #{id} re-ejecutando",
   "rerun_fail": "Re-ejecución fallida: {error}",
-  "arg_build_time": "Hora de build personalizada (opcional)"
+  "artifact_verifying": "Verificando paquete de artefactos...",
+  "artifact_verified_ok": "Firma verificada correctamente.",
+  "artifact_legacy_warning": "Este es un paquete heredado. Continuar activa el flujo de alto riesgo.",
+  "artifact_unverified_warning": "Este paquete no ha pasado la verificación de firma — puede haber sido manipulado durante la descarga.",
+  "artifact_verify_skip": "Paquete no firmado, omitiendo verificación.",
+  "artifact_verify_no_key": "Sin clave de firma configurada, no se puede verificar.",
+  "arg_build_time": "Hora de build personalizada (opcional)",
+  "arg_set_download_dir": "Establecer directorio de descarga predeterminado (guardado en configuración)",
+  "download_dir_saved": "Directorio de descarga predeterminado establecido en: {dir}",
+  "signing_key_generating": "Generando par de claves de firma...",
+  "signing_key_generated": "Clave de firma generada y subida al fork.",
+  "artifact_verify_confirm": "SEGURIDAD: El archivo puede haber sido manipulado durante la descarga (riesgo de secuestro de red). ¿Continuar operación de alto riesgo? (y/n): ",
+  "artifact_verify_skip_user": "Omitido."
 }
