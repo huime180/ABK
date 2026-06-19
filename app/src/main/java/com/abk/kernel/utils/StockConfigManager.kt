@@ -207,10 +207,23 @@ object StockConfigManager {
             val wk = sq(workDir.absolutePath)
             val unpackSc = buildString {
                 appendLine("cd $wk")
-                // 清理可能残留的旧文件
-                appendLine("rm -f $wk/kernel $wk/kconfig $wk/kernel_dtb 2>/dev/null || true")
+                // 清理上次可能残留的内核文件，保留 boot.img
+                appendLine("rm -f kernel kconfig kernel_dtb ramdisk.cpio split_img 2>/dev/null || true")
                 appendLine("$mb unpack boot.img 2>&1 || { echo 'magiskboot unpack failed'; exit 3; }")
-                appendLine("[ -f $wk/kernel ] && { $mb extract $wk/kernel 2>&1 || echo 'magiskboot extract skipped'; } || echo 'no kernel file found'")
+                // 用 decompress + strings 代替 extract，避免 payload 格式报错
+                appendLine("if [ -f $wk/kernel ]; then")
+                appendLine("  echo '尝试 decompress kernel …'")
+                appendLine("  $mb decompress $wk/kernel 2>/dev/null || true")
+                appendLine("  echo '提取 CONFIG_ 配置项 (strings+grep) …'")
+                appendLine("  strings $wk/kernel 2>/dev/null | grep 'CONFIG_[A-Za-z0-9_]*=.' | sed 's/=\$/=y/' > $wk/kconfig 2>/dev/null || true")
+                appendLine("  if [ ! -s $wk/kconfig ]; then")
+                appendLine("    echo 'strings 无结果，尝试 grep -a 直接从二进制提取 …'")
+                appendLine("    grep -a -o -E 'CONFIG_[A-Za-z0-9_]+=[ym]' $wk/kernel > $wk/kconfig 2>/dev/null || true")
+                appendLine("  fi")
+                appendLine("else")
+                appendLine("  echo 'no kernel file found'")
+                appendLine("fi")
+                appendLine("[ -s $wk/kconfig ] || { echo '未能提取内核配置'; exit 4; }")
             }
             val unpackRes = RootUtils.execRootCommandForWebUi(unpackSc, timeoutSeconds = 120L)
             output.addAll(unpackRes.output.filter { it.isNotBlank() })
