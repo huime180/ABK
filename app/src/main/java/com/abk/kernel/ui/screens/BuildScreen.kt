@@ -3026,8 +3026,6 @@ private fun BuildCustomModuleGroup.subtitle(noStageLabel: String, sourcePrefix: 
     }
 }
 
-}
-
 private enum class BuildSection {
     KernelVersion,
     KernelSu,
@@ -3305,4 +3303,5 @@ fun DropdownField(
             }
         }
     }
+}
 }
