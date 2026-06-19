@@ -182,7 +182,6 @@
   "arg_oneplus_8e": "启用一加 8E 支持喵",
   "arg_ntsync": "启用 NTsync 喵",
   "arg_networking": "启用网络增强喵 (IPSet + BBR)",
-  "arg_zram_full_algo": "ZRAM 完整算法支持喵",
   "arg_zram_extra_algos": "自定义 ZRAM 算法喵 (逗号分隔)",
   "arg_custom_modules": "自定义外部模块喵 (格式: url;stage|url;stage)",
   "arg_no_sync": "跳过同步喵",

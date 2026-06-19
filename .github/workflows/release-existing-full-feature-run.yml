@@ -144,8 +144,7 @@ jobs:
           build_time="$(metadata_value build_time "Sun Dec 01 08:10:00 UTC 2024")"
           susfs_enabled="$(metadata_value susfs_enabled "true")"
           use_zram="$(metadata_value use_zram "true")"
-          zram_full_algo="$(metadata_value zram_full_algo "true")"
-          zram_extra_algos="$(metadata_value zram_extra_algos "无")"
+          zram_extra_algos="$(metadata_value zram_extra_algos "full")"
           use_bbg="$(metadata_value use_bbg "true")"
           use_ddk="$(metadata_value use_ddk "true")"
           use_kpm="$(metadata_value use_kpm "true")"
@@ -214,8 +213,7 @@ jobs:
           | 构建时间 | $build_time |
           | SUSFS 状态 | $susfs_enabled |
           | ZRAM 增强 | $use_zram |
-          | ZRAM 完整算法 | $zram_full_algo |
-          | ZRAM 额外算法 | $zram_extra_algos |
+          | ZRAM 算法 | $zram_extra_algos |
           | BBG 补丁 | $use_bbg |
           | DDK LSM | $use_ddk |
           | NTsync 补丁 | $use_ntsync |

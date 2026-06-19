@@ -4963,7 +4963,6 @@ internal fun decodeBuildPlanPayload(
         useRekernel = featureMask.hasBuildPlanFlag(6),
         cancelSusfs = featureMask.hasBuildPlanFlag(7),
         suppOp = featureMask.hasBuildPlanFlag(8),
-        zramFullAlgo = featureMask.hasBuildPlanFlag(9),
         zramExtraAlgos = zramExtraAlgos,
         kpmPassword = kpmPassword,
         customRef = customRef,
@@ -5068,12 +5067,11 @@ private fun KernelBuildConfig.toBuildPlanFeatureMask(): Int {
     set(6, useRekernel)
     set(7, cancelSusfs)
     set(8, suppOp)
-    set(9, zramFullAlgo)
-    set(10, useCustomExternalModules)
-    set(11, onePlusUseLz4kd)
-    set(12, onePlusUseBbr)
-    set(13, onePlusUseProxyOptimization)
-    set(14, onePlusUseUnicodeBypass)
+    set(9, useCustomExternalModules)
+    set(10, onePlusUseLz4kd)
+    set(11, onePlusUseBbr)
+    set(12, onePlusUseProxyOptimization)
+    set(13, onePlusUseUnicodeBypass)
     return mask
 }
 
@@ -5132,7 +5130,6 @@ private const val SUMMARY_LABEL_BUILD_TIME = "\u6784\u5efa\u65f6\u95f4"
 private const val SUMMARY_LABEL_ADD_DEFCONFIG = "\u989d\u5916\u5185\u6838\u53c2\u6570"
 private const val SUMMARY_LABEL_SUSFS_STATUS = "susfs\u72b6\u6001"
 private const val SUMMARY_LABEL_ZRAM = "zram\u589e\u5f3a"
-private const val SUMMARY_LABEL_ZRAM_FULL_ALGO = "zram\u5b8c\u6574\u7b97\u6cd5"
 private const val SUMMARY_LABEL_ZRAM_EXTRA_ALGOS = "zram\u989d\u5916\u7b97\u6cd5"
 private const val SUMMARY_LABEL_BBG = "bbg\u8865\u4e01"
 private const val SUMMARY_LABEL_NTSYNC = "ntsync\u8865\u4e01"
@@ -5202,7 +5199,6 @@ internal fun parseBuildParameterSummary(
         addDefconfig = values["addDefconfig"].orEmpty(),
         susfsEnabled = values["susfsEnabled"].orEmpty(),
         zramEnabled = values["zramEnabled"].orEmpty(),
-        zramFullAlgo = values["zramFullAlgo"].orEmpty(),
         zramExtraAlgos = values["zramExtraAlgos"].orEmpty(),
         bbgEnabled = values["bbgEnabled"].orEmpty(),
         ddkLsm = values["ddkLsm"].orEmpty(),
@@ -5238,7 +5234,6 @@ private fun normalizeBuildSummaryLabel(label: String): String? {
         compact.contains(SUMMARY_LABEL_ADD_DEFCONFIG) -> "addDefconfig"
         compact.contains(SUMMARY_LABEL_SUSFS_STATUS) -> "susfsEnabled"
         compact.contains(SUMMARY_LABEL_ZRAM) -> "zramEnabled"
-        compact.contains(SUMMARY_LABEL_ZRAM_FULL_ALGO) -> "zramFullAlgo"
         compact.contains(SUMMARY_LABEL_ZRAM_EXTRA_ALGOS) -> "zramExtraAlgos"
         compact.contains(SUMMARY_LABEL_BBG) -> "bbgEnabled"
         compact.contains("ddklsm") -> "ddkLsm"
@@ -5445,8 +5440,11 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "use_rekernel" to config.useRekernel.toString(),
         "cancel_susfs" to config.cancelSusfs.toString(),
         "supp_op" to config.suppOp.toString(),
-        "zram_full_algo" to config.zramFullAlgo.toString(),
-        "zram_extra_algos" to config.zramExtraAlgos,
+        "zram_algos" to when {
+            config.zramFullAlgo -> "full"
+            config.zramExtraAlgos.isNotBlank() -> config.zramExtraAlgos
+            else -> ""
+        },
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
         "stock_config" to config.stockConfig.trim(),

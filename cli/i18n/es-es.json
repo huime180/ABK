@@ -182,7 +182,6 @@
   "arg_oneplus_8e": "Habilitar soporte OnePlus 8E",
   "arg_ntsync": "Habilitar NTsync",
   "arg_networking": "Habilitar red (IPSet + BBR)",
-  "arg_zram_full_algo": "Algoritmos ZRAM completos",
   "arg_zram_extra_algos": "Algoritmos ZRAM personalizados (separados por coma)",
   "arg_custom_modules": "Módulos externos personalizados (formato: url;stage|url;stage)",
   "arg_no_sync": "Omitir sincronización",

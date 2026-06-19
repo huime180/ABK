@@ -36,6 +36,10 @@ on:
       add_defconfig:
         required: false
         type: string
+      stock_config:
+        required: false
+        type: string
+        default: ""
       version:
         required: false
         type: string
@@ -90,11 +94,7 @@ on:
         default: "off"
 
       # ==================== ZRAM 扩展选项 ====================
-      zram_full_algo:
-        required: false
-        type: boolean
-        default: false
-      zram_extra_algos:
+      zram_algos:
         required: false
         type: string
         default: ""
@@ -126,10 +126,6 @@ on:
         required: false
         type: boolean
         default: true
-      stock_config:
-        required: false
-        type: string
-        default: ""
 
 jobs:
   build-kernel:
@@ -149,8 +145,17 @@ jobs:
           set -euo pipefail
 
           effective_use_zram="${{ inputs.use_zram }}"
-          effective_zram_full_algo="${{ inputs.zram_full_algo }}"
-          effective_zram_extra_algos="${{ inputs.zram_extra_algos || '' }}"
+          zram_algos="${{ inputs.zram_algos || '' }}"
+          if [ "$zram_algos" = "full" ]; then
+            effective_zram_full_algo="true"
+            effective_zram_extra_algos=""
+          elif [ -n "$zram_algos" ]; then
+            effective_zram_full_algo="false"
+            effective_zram_extra_algos="$zram_algos"
+          else
+            effective_zram_full_algo="false"
+            effective_zram_extra_algos=""
+          fi
 
           if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
             if [ "$effective_use_zram" = "true" ] || [ "$effective_zram_full_algo" = "true" ] || [ -n "$effective_zram_extra_algos" ]; then
@@ -173,7 +178,8 @@ jobs:
           fi
           echo "EFFECTIVE_KSU_BRANCH=$effective_ksu_branch" >> "$GITHUB_ENV"
 
-          zram_extra_label="${effective_zram_extra_algos:-无}"
+          zram_label="${zram_algos:-无}"
+          if [ "$effective_zram_full_algo" = "true" ]; then zram_label="完整算法"; fi
 
           echo "========================================"
           echo "       内核构建配置摘要"
@@ -189,8 +195,7 @@ jobs:
           echo "额外内核参数   : $(printf "%s" "${{ inputs.add_defconfig }}" | tr '\n' ' ')"
           echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
           echo "ZRAM 增强     : $effective_use_zram"
-          echo "ZRAM 完整算法 : $effective_zram_full_algo"
-          echo "ZRAM 额外算法 : $zram_extra_label"
+          echo "ZRAM 算法     : $zram_label"
           echo "BBG 补丁      : ${{ inputs.use_bbg }}"
           echo "DDK LSM       : ${{ inputs.use_ddk }}"
           echo "NTsync 补丁   : ${{ inputs.use_ntsync }}"
@@ -200,7 +205,7 @@ jobs:
           echo "Re-Kernel     : ${{ inputs.use_rekernel }}"
           echo "虚拟化支持   : ${{ inputs.virtualization_support }}"
           echo "自定义注入    : ${{ inputs.custom_external_modules }}"
-          echo "Stock Config  : 自动检测 config/stock_defconfig"
+          echo "Stock Config  : ${{ inputs.stock_config }}"
           echo "========================================"
 
       - name: 校验自定义内核版本组合
@@ -2595,7 +2600,7 @@ jobs:
           fi
 
           # ---- ZRAM 完整算法支持 ----
-          if [ "${EFFECTIVE_ZRAM_FULL_ALGO:-false}" = "true" ]; then
+          if [ "${EFFECTIVE_ZRAM_EXTRA_ALGOS:-false}" = "true" ]; then
             echo "启用 ZRAM 完整算法支持..."
             cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_CRYPTO_LZO=y
@@ -2856,7 +2861,7 @@ jobs:
           ABK_BUILD_VERSION: ${{ inputs.version }}
           ABK_BUILD_TIME: ${{ inputs.build_time }}
           ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
-          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_algos }}
           ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
           ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
           ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
@@ -2866,7 +2871,6 @@ jobs:
           ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
           ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
           ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
-          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
           export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
@@ -3148,7 +3152,7 @@ jobs:
           ABK_BUILD_VERSION: ${{ inputs.version }}
           ABK_BUILD_TIME: ${{ inputs.build_time }}
           ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
-          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_algos }}
           ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
           ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
           ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
@@ -3158,7 +3162,6 @@ jobs:
           ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
           ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
           ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
-          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
           export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
@@ -4809,11 +4812,9 @@ jobs:
               fi
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=local $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
-              echo "=== out 目录大小 ==="
-              du -sh out 2>/dev/null || echo "no out"
-              echo "=== out/cache 目录 ==="
-              du -sh out/cache 2>/dev/null || echo "no out/cache"
-              ls -l out/cache 2>/dev/null || echo "no out/cache"
+              echo "=== disk_cache 信息 ==="
+              du -sh /home/runner/.cache/bazel 2>/dev/null || echo "no cache"
+              ls -l /home/runner/.cache/bazel 2>/dev/null || echo "no cache"
             fi
             echo "内核编译完成！"
   

@@ -108,15 +108,10 @@ on:
         default: false
 
       # ==================== ZRAM 扩展选项 ====================
-      zram_full_algo:
-        description: "启用 ZRAM 完整算法支持（LZO/LZ4/LZ4HC/LZ4K/LZ4KD/DEFLATE/842/ZSTD，默认 lzo-rle）"
-        type: boolean
-        default: false
-      zram_extra_algos:
-        description: "自定义 ZRAM 算法（逗号分隔，如 lzo,lz4,deflate,zstd；仅在未启用完整算法时生效）"
+      zram_algos:
+        required: false
         type: string
         default: ""
-        required: false
 
       # ==================== KPM 扩展选项 ====================
       kpm_password:
@@ -189,8 +184,7 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       cancel_susfs: ${{ inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
@@ -215,8 +209,7 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       cancel_susfs: ${{ inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
@@ -241,8 +234,7 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       cancel_susfs: ${{ inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
@@ -267,8 +259,7 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       cancel_susfs: ${{ inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
@@ -293,8 +284,7 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       cancel_susfs: ${{ inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}

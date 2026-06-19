@@ -163,9 +163,6 @@ def validate_oneplus_build(args, device_info=None):
     if args.custom_ref:
         args.custom_ref = ""
         warnings.append(t("op_no_custom_ref"))
-    if args.zram_full_algo:
-        args.zram_full_algo = False
-        warnings.append(t("op_no_zram_algo"))
     if args.zram_extra_algos:
         args.zram_extra_algos = ""
         warnings.append(t("op_no_zram_extra"))
@@ -956,7 +953,6 @@ def cmd_build(args):
                 "use_rekernel": str(args.rekernel).lower(),
                 "use_ntsync": str(args.ntsync).lower(),
                 "use_networking": str(args.networking).lower(),
-                "zram_full_algo": str(args.zram_full_algo).lower(),
                 "zram_extra_algos": args.zram_extra_algos or "",
             }
         else:
@@ -976,7 +972,6 @@ def cmd_build(args):
                 "use_rekernel": str(args.rekernel).lower(),
                 "use_ntsync": str(args.ntsync).lower(),
                 "use_networking": str(args.networking).lower(),
-                "zram_full_algo": str(args.zram_full_algo).lower(),
                 "zram_extra_algos": args.zram_extra_algos or "",
             }
         
@@ -1088,7 +1083,6 @@ def cmd_build(args):
                 "cancel_susfs": str(not args.susfs).lower(),
                 "use_ntsync": str(args.ntsync).lower(),
                 "use_networking": str(args.networking).lower(),
-                "zram_full_algo": str(args.zram_full_algo).lower(),
             }
             
             if tk == "custom":
@@ -1121,7 +1115,6 @@ def cmd_build(args):
                 inputs.pop("use_ntsync", None)
                 inputs.pop("use_networking", None)
                 inputs.pop("use_rekernel", None)
-                inputs.pop("zram_full_algo", None)
             elif not args.matrix or args.matrix == "both":
                 pass
             
@@ -1360,7 +1353,6 @@ def main():
     build_parser.add_argument("--unicode-bypass", action="store_true", help=t("arg_unicode"))
     build_parser.add_argument("--ntsync", action="store_true", default=False, help=t("arg_ntsync"))
     build_parser.add_argument("--networking", action="store_true", default=False, help=t("arg_networking"))
-    build_parser.add_argument("--zram-full-algo", action="store_true", default=False, help=t("arg_zram_full_algo"))
     build_parser.add_argument("--zram-extra-algos", help=t("arg_zram_extra_algos"))
     build_parser.add_argument("--custom-modules", help=t("arg_custom_modules"))
     build_parser.set_defaults(func=cmd_build)

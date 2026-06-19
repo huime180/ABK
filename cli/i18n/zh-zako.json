@@ -193,7 +193,6 @@
   "arg_oneplus_8e": "开启一加 8E 处理器支持（老古董特供？）",
   "arg_ntsync": "开启 NTsync 船新同步",
   "arg_networking": "开启网络增强（IPSet + BBR 极速冲浪）",
-  "arg_zram_full_algo": "ZRAM 完整算法全都要支持",
   "arg_zram_extra_algos": "自定义 ZRAM 算法（用逗号隔开啦，比如 lzo,lz4,zstd）",
   "arg_custom_modules": "自定义外部模块（格式别搞错：url;stage|url;stage）",
   "arg_no_sync": "绝对不同步 fork！就算落后上游一万年也不管！",

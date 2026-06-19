@@ -141,7 +141,6 @@
   "arg_oneplus_8e": "Enable OnePlus 8E support",
   "arg_ntsync": "Enable NTsync",
   "arg_networking": "Enable networking (IPSet + BBR)",
-  "arg_zram_full_algo": "Enable ZRAM full algorithms",
   "arg_zram_extra_algos": "Custom ZRAM algorithms (comma-separated, e.g. lzo,lz4,zstd)",
   "arg_custom_modules": "Custom external modules (format: url;stage|url;stage)",
   "arg_run_id": "Build run ID",
