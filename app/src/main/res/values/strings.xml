@@ -1219,4 +1219,6 @@
     <string name="gh_root_must_be_object">根节点必须是 JSON 对象</string>
     <string name="gh_missing_module_name">缺少 ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">模块仓库</string>
+    <string name="build_stock_config_title">Stock Config</string>
+    <string name="build_stock_config_desc">根据机型应用 stock_config；也可自行识别本机或 boot 镜像中的 config 并推送到仓库。</string>
 </resources>

@@ -1219,4 +1219,6 @@
     <string name="gh_root_must_be_object">Root node must be a JSON object</string>
     <string name="gh_missing_module_name">Missing ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">Module repository</string>
+    <string name="build_stock_config_title">Stock Config</string>
+    <string name="build_stock_config_desc">Apply stock_config by device model; or extract config from device or boot image and push to repository.</string>
 </resources>

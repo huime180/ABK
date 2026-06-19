@@ -34,6 +34,7 @@ import com.abk.kernel.utils.FailureLogExtractor
 import com.abk.kernel.utils.NotificationUtils
 import com.abk.kernel.utils.WorkflowStepI18n
 import com.abk.kernel.utils.RootUtils
+import com.abk.kernel.utils.StockConfigManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,11 @@ data class MainUiState(
     val validatingCustomExternalModule: Boolean = false,
     val customExternalModuleError: String? = null,
     val recommendedBuildConfig: KernelBuildConfig? = null,
+    // Stock Config
+    val stockConfigDeviceInfo: StockConfigManager.DeviceInfo? = null,
+    val stockConfigExtracting: Boolean = false,
+    val stockConfigLastPath: String? = null,
+    val stockConfigError: String? = null,
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -737,6 +743,124 @@ class MainViewModel @JvmOverloads constructor(
                 )
             }
         }
+    }
+
+    // ── Stock Config ────────────────────────────────────────────────────
+
+    /** Auto-detected on BuildScreen entry. */
+    fun detectDeviceModel() {
+        val info = StockConfigManager.detectDevice()
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = info,
+                stockConfigError = null
+            )
+        }
+        // auto-apply device to config if toggle is on
+        if (_uiState.value.buildConfig.stockConfigEnabled) {
+            applyDeviceToConfig(info.configId)
+        }
+    }
+
+    /** Toggle stock config on/off. When on, writes device codename into the build config. */
+    fun toggleStockConfig(enabled: Boolean) {
+        val config = _uiState.value.buildConfig
+        if (enabled) {
+            val device = _uiState.value.stockConfigDeviceInfo?.configId ?: StockConfigManager.detectDevice().configId
+            _uiState.update {
+                it.copy(buildConfig = config.copy(stockConfigEnabled = true, stockConfig = device))
+            }
+        } else {
+            _uiState.update {
+                it.copy(buildConfig = config.copy(stockConfigEnabled = false, stockConfig = ""))
+            }
+        }
+    }
+
+    private fun applyDeviceToConfig(deviceId: String) {
+        val config = _uiState.value.buildConfig
+        if (config.stockConfigEnabled && config.stockConfig != deviceId) {
+            _uiState.update { it.copy(buildConfig = config.copy(stockConfig = deviceId)) }
+        }
+    }
+
+    // ── Extract & push ──────────────────────────────────────────────────
+
+    /** Extract from /proc/config and push to fork. */
+    fun extractFromProc() {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先登录 GitHub 并 fork 仓库") }
+            return
+        }
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.extractFromProcConfig(app, device.configId)
+                pushAndFinish(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    /** Extract from boot.img via SAF and push to fork. */
+    fun extractFromBootImage(uri: android.net.Uri) {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先登录 GitHub 并 fork 仓库") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
+            try {
+                val app = getApplication<Application>()
+                val local = StockConfigManager.copyContentUriToLocal(app, uri)
+                    ?: throw Exception("无法读取 boot.img")
+                val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+                val result = StockConfigManager.extractFromBootImage(app, local, device.configId)
+                try { java.io.File(local).delete() } catch (_: Exception) {}
+                pushAndFinish(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    private suspend fun pushAndFinish(
+        app: Application,
+        result: StockConfigManager.StockConfigResult,
+        deviceId: String
+    ) {
+        _uiState.update {
+            it.copy(stockConfigLastPath = result.configPath,
+                stockConfigError = if (result.success) null else result.output.lastOrNull())
+        }
+        if (!result.success || result.configPath == null) {
+            _uiState.update { it.copy(stockConfigExtracting = false) }
+            return
+        }
+        // Push to fork
+        val token = prefs.accessToken.first() ?: ""
+        if (token.isNotBlank()) {
+            val owner = _uiState.value.forkRepo?.owner?.login ?: _uiState.value.user?.login ?: ""
+            val repo = _uiState.value.forkRepo?.name ?: ""
+            val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+            if (owner.isNotBlank() && repo.isNotBlank()) {
+                val pushed = StockConfigManager.pushToFork(app, token, owner, repo, branch, deviceId)
+                _uiState.update {
+                    it.copy(
+                        stockConfigExtracting = false,
+                        stockConfigLastPath = result.configPath,
+                        stockConfigError = if (pushed) null else "提取成功，推送仓库失败"
+                    )
+                }
+                return
+            }
+        }
+        _uiState.update { it.copy(stockConfigExtracting = false) }
     }
 
     fun setRuntimeNavigationEnabled(enabled: Boolean) = runtime.setRuntimeNavigationEnabled(enabled)
@@ -5325,6 +5449,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "zram_extra_algos" to config.zramExtraAlgos,
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
+        "stock_config" to config.stockConfig.trim(),
         "custom_ref" to if (config.kernelsuBranch == KSU_BRANCH_CUSTOM) {
             config.customRef.trim()
         } else {
