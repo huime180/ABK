@@ -772,9 +772,13 @@ class MainViewModel @JvmOverloads constructor(
 
     // ── Method 1: Extract from /proc/config ─────────────────────────
 
-    /** Extract kernel config from /proc/config.gz or /proc/config (may need root). */
+    /** Extract kernel config from /proc/config. Requires login + fork, optionally root. */
     fun extractStockConfigFromProc() {
         if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
         val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update {
@@ -786,7 +790,7 @@ class MainViewModel @JvmOverloads constructor(
                 val result = StockConfigManager.extractFromProcConfig(app, device.configId) { line ->
                     _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
                 }
-                finishStockConfigExtraction(app, result)
+                finishAndPushStockConfig(app, result, device.configId)
             } catch (e: Exception) {
                 _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
             }
@@ -795,9 +799,13 @@ class MainViewModel @JvmOverloads constructor(
 
     // ── Method 2: Extract from boot.img file ─────────────────────────
 
-    /** Extract kernel config from a user-selected boot.img file via SAF content URI. */
+    /** Extract from a boot.img via SAF URI. Requires login + fork + root. */
     fun extractStockConfigFromBootImageUri(uri: android.net.Uri) {
         if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update {
                 it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "bootimg",
@@ -806,18 +814,15 @@ class MainViewModel @JvmOverloads constructor(
             try {
                 val app = getApplication<Application>()
                 val localPath = StockConfigManager.copyContentUriToLocal(app, uri)
-                if (localPath == null) {
-                    throw Exception("无法读取选中的 boot.img 文件")
-                }
+                    ?: throw Exception("无法读取选中的 boot.img 文件")
                 val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
                 val result = StockConfigManager.extractFromBootImageFile(
                     app, localPath, device.configId
                 ) { line ->
                     _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
                 }
-                // Clean up temp file
                 try { java.io.File(localPath).delete() } catch (_: Exception) {}
-                finishStockConfigExtraction(app, result)
+                finishAndPushStockConfig(app, result, device.configId)
             } catch (e: Exception) {
                 _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
             }
@@ -826,11 +831,12 @@ class MainViewModel @JvmOverloads constructor(
 
     // ── Method 3: Fetch from repository ──────────────────────────────
 
-    /** Fetch stock_config for a given device ID from the remote GitHub repo. */
+    /** Fetch stock_config for deviceId from the remote upstream repo (no login needed). */
     fun fetchStockConfigFromRepo(deviceId: String) {
         if (_uiState.value.stockConfigExtracting) return
-        val user = _uiState.value.user?.login ?: return
-        val repo = _uiState.value.forkRepo?.name ?: return
+        val user = _uiState.value.forkRepo?.owner?.login
+            ?: _uiState.value.user?.login ?: ""
+        val repo = _uiState.value.forkRepo?.name ?: "ABK"
         val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update {
@@ -851,7 +857,7 @@ class MainViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Shared completion handler for all three extraction methods. */
+    /** Shared completion for method 3 (no push). */
     private fun finishStockConfigExtraction(app: Application, result: StockConfigManager.StockConfigResult) {
         val cached = StockConfigManager.listCachedConfigs(app)
         _uiState.update {
@@ -866,6 +872,46 @@ class MainViewModel @JvmOverloads constructor(
         if (result.success && result.configPath != null) {
             applyStockConfigToBuildConfig(result.deviceInfo.configId)
         }
+    }
+
+    /** Completion for methods 1 & 2: also push to fork repo. */
+    private suspend fun finishAndPushStockConfig(
+        app: Application,
+        result: StockConfigManager.StockConfigResult,
+        configId: String
+    ) {
+        // Update local state first
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(configId)
+            // Push to fork repo
+            val token = prefs.accessToken.first() ?: ""
+            if (token.isNotBlank()) {
+                val owner = _uiState.value.forkRepo?.owner?.login
+                    ?: _uiState.value.user?.login ?: return
+                val repo = _uiState.value.forkRepo?.name ?: return
+                val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+                val pushSuccess = StockConfigManager.pushStockConfigToFork(
+                    app, token, owner, repo, branch, configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                if (!pushSuccess) {
+                    _uiState.update {
+                        it.copy(stockConfigError = "提取成功但推送到仓库失败，请检查网络或权限")
+                    }
+                }
+            }
+        }
+        _uiState.update { it.copy(stockConfigExtracting = false) }
     }
 
     /** Apply a cached stock config to the current build config. */

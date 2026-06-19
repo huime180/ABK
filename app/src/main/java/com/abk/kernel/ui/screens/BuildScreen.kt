@@ -3136,21 +3136,31 @@ private fun StockConfigContent(
     Spacer(Modifier.height(8.dp))
 
     // ── Method 1: /proc/config ───────────────────────────────────────
+    val needLogin = state.isLoggedIn && state.forkRepo != null
     MethodHeader(
         icon = Icons.Default.Terminal,
         label = "方式1: 从本机 /proc/config 提取",
-        desc = "读取本机内核 /proc/config.gz（可能需要 root）",
+        desc = if (needLogin) "读取 /proc/config.gz，提取后自动推送至 fork 仓库"
+               else "读取 /proc/config.gz（需要先登录 GitHub 并 fork 仓库）",
         expanded = method1Expanded,
         onToggle = { method1Expanded = !method1Expanded },
         active = extractMethod == "proc"
     )
     AnimatedVisibility(visible = method1Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            Text(
-                text = "直接从运行中的内核读取 /proc/config.gz 或 /proc/config。无需选择文件，部分设备可能不需要 root。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (!needLogin) {
+                Text(
+                    text = "需要先完成 GitHub 登录并 fork 仓库，提取后将自动推送到 fork 的 config/stock_config/ 目录。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                Text(
+                    text = "直接读取 /proc/config.gz，提取后自动 force push 到 ${state.user?.login}/${state.forkRepo?.name} 的 config/stock_config/ 目录。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Button(
                 onClick = {
@@ -3158,7 +3168,7 @@ private fun StockConfigContent(
                     vm.extractStockConfigFromProc()
                 },
                 modifier = Modifier.fillMaxWidth().height(44.dp),
-                enabled = !isExtracting
+                enabled = needLogin && !isExtracting
             ) {
                 Icon(
                     if (extractMethod == "proc" && isExtracting) Icons.Default.Refresh else Icons.Default.Download,
@@ -3176,18 +3186,27 @@ private fun StockConfigContent(
     MethodHeader(
         icon = Icons.Default.Archive,
         label = "方式2: 从 boot.img 文件提取",
-        desc = "选择一个 boot.img 使用 magiskboot 解包提取（需要 root）",
+        desc = if (needLogin) "选择 boot.img 用 magiskboot 解包，提取后推送"
+               else "选择 boot.img 解包提取（需要先登录 fork + root）",
         expanded = method2Expanded,
         onToggle = { method2Expanded = !method2Expanded },
         active = extractMethod == "bootimg"
     )
     AnimatedVisibility(visible = method2Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            Text(
-                text = "选择一个本机或从其他来源获取的 boot.img 文件，使用 magiskboot 解包提取其中编译的内核配置 (kconfig)。需要 root 权限运行 magiskboot。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (!needLogin) {
+                Text(
+                    text = "需要先完成 GitHub 登录并 fork 仓库。提取后将自动推送到 fork 的 config/stock_config/ 目录。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                Text(
+                    text = "选择 boot.img 文件，使用 magiskboot 解包提取 kconfig。提取后自动推送到 ${state.user?.login}/${state.forkRepo?.name}。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Button(
                 onClick = {
@@ -3195,7 +3214,7 @@ private fun StockConfigContent(
                     bootImgPicker.launch(arrayOf("*/*"))
                 },
                 modifier = Modifier.fillMaxWidth().height(44.dp),
-                enabled = rootGranted && !isExtracting
+                enabled = needLogin && rootGranted && !isExtracting
             ) {
                 Icon(
                     if (extractMethod == "bootimg" && isExtracting) Icons.Default.Refresh else Icons.Default.FolderOpen,
@@ -3214,48 +3233,39 @@ private fun StockConfigContent(
     Spacer(Modifier.height(6.dp))
 
     // ── Method 3: Repository ─────────────────────────────────────────
-    val isLoggedIn = state.isLoggedIn && state.forkRepo != null
     MethodHeader(
         icon = Icons.Default.CloudDownload,
-        label = "方式3: 从仓库获取",
-        desc = if (isLoggedIn) "从 GitHub 仓库 config/stock_config/ 下载"
-                else "从 GitHub 仓库下载（需要先登录）",
+        label = "方式3: 从远程仓库获取",
+        desc = "从上游仓库 config/stock_config/ 下载对应机型的配置",
         expanded = method3Expanded,
         onToggle = { method3Expanded = !method3Expanded },
         active = extractMethod == "repo"
     )
     AnimatedVisibility(visible = method3Expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Column(modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            if (!isLoggedIn) {
-                Text(
-                    text = "需要先完成 GitHub 登录和 Fork 配置，才能从你的仓库下载 stock_config。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+            val targetId = deviceInfo?.configId ?: ""
+            val repoOwner = state.forkRepo?.owner?.login ?: state.user?.login ?: "unknown"
+            val repoName = state.forkRepo?.name ?: "ABK"
+            Text(
+                text = "从 $repoOwner/$repoName 仓库的 config/stock_config/ 目录拉取 ${targetId}_stock_config。无需登录即可使用。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            Button(
+                onClick = {
+                    method3Expanded = false; showOutput = true
+                    vm.fetchStockConfigFromRepo(targetId)
+                },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                enabled = targetId.isNotBlank() && !isExtracting
+            ) {
+                Icon(
+                    if (extractMethod == "repo" && isExtracting) Icons.Default.Refresh else Icons.Default.CloudDownload,
+                    null, modifier = Modifier.size(17.dp)
                 )
-            } else {
-                val targetId = deviceInfo?.configId ?: ""
-                val repoPath = "${state.user?.login}/${state.forkRepo?.name}"
-                Text(
-                    text = "从 $repoPath 的 config/stock_config/ 目录拉取 ${targetId}_stock_config。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(6.dp))
-                Button(
-                    onClick = {
-                        method3Expanded = false; showOutput = true
-                        vm.fetchStockConfigFromRepo(targetId)
-                    },
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    enabled = targetId.isNotBlank() && !isExtracting
-                ) {
-                    Icon(
-                        if (extractMethod == "repo" && isExtracting) Icons.Default.Refresh else Icons.Default.CloudDownload,
-                        null, modifier = Modifier.size(17.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (extractMethod == "repo" && isExtracting) "下载中…" else "从仓库获取 ${targetId}_stock_config")
-                }
+                Spacer(Modifier.width(6.dp))
+                Text(if (extractMethod == "repo" && isExtracting) "下载中…" else "从仓库获取 ${targetId}_stock_config")
             }
         }
     }
