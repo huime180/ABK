@@ -1,12 +1,10 @@
 package com.abk.kernel.utils
 
 import android.content.Context
-import android.net.Uri
 import android.os.Build
 import android.util.Base64
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -153,111 +151,6 @@ object StockConfigManager {
 
     // ── Method 2: from boot.img ─────────────────────────────────────────
 
-    fun extractFromBootImage(
-        context: Context,
-        bootImagePath: String,
-        configId: String? = null,
-        onOutput: ((String) -> Unit)? = null
-    ): StockConfigResult {
-        val deviceInfo = detectDevice()
-        val targetId = configId?.trim()?.takeIf { it.isNotBlank() } ?: deviceInfo.configId
-        val output = mutableListOf<String>()
-        fun log(m: String) { output.add(m); onOutput?.invoke(m); Log.d(TAG, m) }
-
-        // 时间戳独立 workDir，避免与 /proc/config 提取残留混淆
-        val workDir = File(context.cacheDir, "stock-bootimg-${System.currentTimeMillis()}")
-        workDir.mkdirs()
-        val configDir = File(context.filesDir, STOCK_CONFIG_DIR); configDir.mkdirs()
-
-        try {
-            log("从 boot.img 提取 $targetId …")
-            val magiskboot = listOf(
-                File("/data/adb/ksud/bin/magiskboot"),
-                File("/data/local/tmp/magiskboot"),
-                File(context.applicationInfo.nativeLibraryDir, "libmagiskboot.so"),
-            ).firstOrNull { it.isFile && it.canRead() }
-            if (magiskboot == null) {
-                log("未找到 magiskboot (需要 libmagiskboot.so 或 /data/adb/ksud/bin/magiskboot)")
-                workDir.deleteRecursively()
-                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
-            }
-
-            // 复制到 workDir 内执行，规避 SELinux/Playland 限制
-            val localMb = File(workDir, "magiskboot")
-            magiskboot.copyTo(localMb, overwrite = true)
-            localMb.setExecutable(true)
-
-            val bootImg = File(workDir, "boot.img")
-            val srcP = sq(bootImagePath)
-            val dstP = sq(bootImg.absolutePath)
-            val cpSc = buildString {
-                appendLine("[ -f $srcP ] || exit 2")
-                appendLine("cp $srcP $dstP 2>/dev/null || cat $srcP > $dstP")
-                appendLine("chmod 644 $dstP")
-            }
-            RootUtils.execRootCommandForWebUi(cpSc, timeoutSeconds = 30L)
-
-            if (!bootImg.isFile || bootImg.length() == 0L) {
-                log("boot.img 复制失败")
-                workDir.deleteRecursively()
-                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
-            }
-
-            val mb = sq(localMb.absolutePath)
-            val wk = sq(workDir.absolutePath)
-            val unpackSc = buildString {
-                appendLine("cd $wk")
-                // 清理上次可能残留的内核文件，保留 boot.img
-                appendLine("rm -f kernel kconfig kernel_dtb ramdisk.cpio split_img 2>/dev/null || true")
-                appendLine("$mb unpack boot.img 2>&1 || { echo 'magiskboot unpack failed'; exit 3; }")
-                // 用 decompress + strings 代替 extract，避免 payload 格式报错
-                appendLine("if [ -f $wk/kernel ]; then")
-                appendLine("  echo '尝试 decompress kernel …'")
-                appendLine("  $mb decompress $wk/kernel 2>/dev/null || true")
-                appendLine("  echo '提取 CONFIG_ 配置项 (strings+grep) …'")
-                appendLine("  strings $wk/kernel 2>/dev/null | grep 'CONFIG_[A-Za-z0-9_]*=.' | sed 's/=\$/=y/' > $wk/kconfig 2>/dev/null || true")
-                appendLine("  if [ ! -s $wk/kconfig ]; then")
-                appendLine("    echo 'strings 无结果，尝试 grep -a 直接从二进制提取 …'")
-                appendLine("    grep -a -o -E 'CONFIG_[A-Za-z0-9_]+=[ym]' $wk/kernel > $wk/kconfig 2>/dev/null || true")
-                appendLine("  fi")
-                appendLine("else")
-                appendLine("  echo 'no kernel file found'")
-                appendLine("fi")
-                appendLine("[ -s $wk/kconfig ] || { echo '未能提取内核配置'; exit 4; }")
-            }
-            val unpackRes = RootUtils.execRootCommandForWebUi(unpackSc, timeoutSeconds = 120L)
-            output.addAll(unpackRes.output.filter { it.isNotBlank() })
-
-            // 严格读取本次 workDir 内的 kconfig
-            val kconfig = File(workDir, "kconfig")
-            val destFile = File(configDir, "$targetId$STOCK_CONFIG_SUFFIX")
-            if (kconfig.isFile && kconfig.readText().contains("CONFIG_")) {
-                destFile.writeText(buildString {
-                    appendLine("# Stock Kernel Config")
-                    appendLine("# Device: ${deviceInfo.model}")
-                    appendLine("# Config ID: $targetId")
-                    appendLine("# Source: boot.img ($bootImagePath)")
-                    appendLine("# Extracted: ${now()}")
-                    appendLine()
-                })
-                kconfig.forEachLine { if (it.trim().startsWith("CONFIG_")) destFile.appendText(it.trim() + "\n") }
-                log("提取成功: ${destFile.absolutePath}")
-            } else {
-                log("magiskboot 未能提取内核配置")
-                workDir.deleteRecursively()
-                return StockConfigResult(false, deviceInfo, null, output, "bootimg")
-            }
-            workDir.deleteRecursively()
-            return StockConfigResult(true, deviceInfo, destFile.absolutePath, output)
-        } catch (e: Exception) {
-            Log.e(TAG, "bootimg extract failed", e)
-            workDir.deleteRecursively()
-            log("异常: ${e.message}")
-            return StockConfigResult(false, deviceInfo, null, output, "bootimg")
-        }
-    }
-
-    // ── Push to fork ────────────────────────────────────────────────────
 
     fun pushToFork(
         context: Context,
@@ -323,17 +216,6 @@ object StockConfigManager {
 
     // ── SAF helper ──────────────────────────────────────────────────────
 
-    fun copyContentUriToLocal(context: Context, uri: Uri): String? {
-        return try {
-            val temp = File(context.cacheDir, "selected-boot-${System.currentTimeMillis()}.img")
-            context.contentResolver.openInputStream(uri)?.use { i ->
-                FileOutputStream(temp).use { o -> i.copyTo(o) }
-            }
-            temp.takeIf { it.isFile && it.length() > 0L }?.absolutePath
-        } catch (e: Exception) { Log.e(TAG, "copyUri", e); null }
-    }
-
-    // ── Fetch from upstream repository ───────────────────────────────────
 
     const val UPSTREAM_OWNER = "xingguangcuican6666"
     const val UPSTREAM_REPO = "ABK"

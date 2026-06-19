@@ -804,28 +804,6 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     /** Extract from boot.img via SAF and push to fork. */
-    fun extractFromBootImage(uri: android.net.Uri) {
-        if (_uiState.value.stockConfigExtracting) return
-        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
-            _uiState.update { it.copy(stockConfigError = "请先登录 GitHub 并 fork 仓库") }
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
-            try {
-                val app = getApplication<Application>()
-                val local = StockConfigManager.copyContentUriToLocal(app, uri)
-                    ?: throw Exception("无法读取 boot.img")
-                val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
-                val result = StockConfigManager.extractFromBootImage(app, local, device.configId)
-                try { java.io.File(local).delete() } catch (_: Exception) {}
-                pushAndFinish(app, result, device.configId)
-            } catch (e: Exception) {
-                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
-            }
-        }
-    }
-
     private suspend fun pushAndFinish(
         app: Application,
         result: StockConfigManager.StockConfigResult,

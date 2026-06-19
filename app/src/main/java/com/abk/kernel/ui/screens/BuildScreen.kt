@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -3092,13 +3091,6 @@ private fun StockConfigContent(
         if (deviceInfo == null) vm.detectDeviceModel()
     }
 
-    // File picker for boot.img
-    val bootImgPicker = rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri?.let { vm.extractFromBootImage(it) }
-    }
-
     // ── Device info card ────────────────────────────────────────────
     if (deviceInfo != null) {
         ExpressiveSectionCard(
@@ -3164,21 +3156,6 @@ private fun StockConfigContent(
             Spacer(Modifier.width(4.dp))
             Text(
                 if (isExtracting) "提取中…" else "/proc/config",
-                style = MaterialTheme.typography.labelMedium
-            )
-        }
-        // ── boot.img ──
-        OutlinedButton(
-            onClick = { bootImgPicker.launch(arrayOf("*/*")) },
-            modifier = Modifier.weight(1f).height(42.dp),
-            enabled = needLogin && rootGranted && !isExtracting
-        ) {
-            Icon(Icons.Default.Archive, null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text(
-                if (!rootGranted) "需要 Root"
-                else if (isExtracting) "提取中…"
-                else "boot.img",
                 style = MaterialTheme.typography.labelMedium
             )
         }
