@@ -765,22 +765,18 @@ class MainViewModel @JvmOverloads constructor(
     /** Toggle stock config on/off. When on, writes device codename into the build config. */
     fun toggleStockConfig(enabled: Boolean) {
         val config = _uiState.value.buildConfig
-        if (enabled) {
-            val device = _uiState.value.stockConfigDeviceInfo?.configId ?: StockConfigManager.detectDevice().configId
-            _uiState.update {
-                it.copy(buildConfig = config.copy(stockConfigEnabled = true, stockConfig = device))
-            }
-        } else {
-            _uiState.update {
-                it.copy(buildConfig = config.copy(stockConfigEnabled = false, stockConfig = ""))
-            }
-        }
+        val device = _uiState.value.stockConfigDeviceInfo?.configId
+            ?: StockConfigManager.detectDevice().configId
+        updateBuildConfig(config.copy(
+            stockConfigEnabled = enabled,
+            stockConfig = if (enabled) device else ""
+        ))
     }
 
     private fun applyDeviceToConfig(deviceId: String) {
         val config = _uiState.value.buildConfig
         if (config.stockConfigEnabled && config.stockConfig != deviceId) {
-            _uiState.update { it.copy(buildConfig = config.copy(stockConfig = deviceId)) }
+            updateBuildConfig(config.copy(stockConfig = deviceId))
         }
     }
 

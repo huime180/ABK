@@ -571,7 +571,6 @@ jobs:
           path: |
             ${{ env.CCACHE_DIR }}
             ~/.cache/bazel
-            out
           key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-${{ env.CACHE_CODE }}
           restore-keys: |
             ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-
