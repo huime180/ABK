@@ -70,7 +70,7 @@ object StockConfigManager {
         val configId: String
             get() = matchedManifest
                 ?: codename.ifBlank { device }.takeIf { it.isNotBlank() }
-                ?: model.toLowerCase().replace(" ", "_").filter { it.isLetterOrDigit() || it == '_' }.trim('_')
+                ?: model.lowercase().replace(" ", "_").filter { it.isLetterOrDigit() || it == '_' }.trim('_')
     }
 
     data class StockConfigResult(
