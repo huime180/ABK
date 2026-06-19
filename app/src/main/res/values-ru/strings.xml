@@ -1219,4 +1219,6 @@
     <string name="gh_root_must_be_object">Корневой узел должен быть JSON-объектом</string>
     <string name="gh_missing_module_name">Отсутствует ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">Репозиторий модулей</string>
+    <string name="build_stock_config_title">Определение модели и Stock Config</string>
+    <string name="build_stock_config_desc">Определить модель устройства и извлечь конфигурацию ядра (stock_config) из boot.img, сохранить в config/ для использования при сборке.</string>
 </resources>

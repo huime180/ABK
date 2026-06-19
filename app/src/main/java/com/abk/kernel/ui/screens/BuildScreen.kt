@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -1587,6 +1588,14 @@ fun BuildScreen(
                 }
             }
 
+            SectionCard(section = BuildSection.StockConfig) {
+                StockConfigContent(
+                    vm = vm,
+                    state = state,
+                    rootGranted = state.rootGranted
+                )
+            }
+
             SectionCard(section = BuildSection.OptionalConfig) {
                 OutlinedTextField(
                     value = config.addDefconfig,
@@ -1612,7 +1621,6 @@ fun BuildScreen(
                     singleLine = true
                 )
                 ConfigPreviewText(buildTimePreview)
-            }
             }
 
             // Submit button
@@ -1721,6 +1729,7 @@ fun BuildScreen(
             }
         }
     }
+}
 }
 
 @Composable
@@ -3025,6 +3034,7 @@ private enum class BuildSection {
     ZramOptions,
     KpmOptions,
     CustomModules,
+    StockConfig,
     OptionalConfig
 }
 
@@ -3038,6 +3048,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_zram_options)
             BuildSection.KpmOptions -> stringResource(R.string.build_kpm_options)
             BuildSection.CustomModules -> stringResource(R.string.build_custom_modules)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_title)
             BuildSection.OptionalConfig -> stringResource(R.string.build_optional_config)
         },
         subtitle = when (section) {
@@ -3047,6 +3058,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_section_zram_desc)
             BuildSection.KpmOptions -> stringResource(R.string.build_section_kpm_desc)
             BuildSection.CustomModules -> stringResource(R.string.build_section_custom_modules_desc)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_desc)
             BuildSection.OptionalConfig -> stringResource(R.string.build_section_default_desc)
         },
         icon = when (section) {
@@ -3056,10 +3068,145 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> Icons.Default.Compress
             BuildSection.KpmOptions -> Icons.Default.Key
             BuildSection.CustomModules -> Icons.Default.Extension
+            BuildSection.StockConfig -> Icons.Default.PhoneAndroid
             else -> Icons.Default.Edit
         },
         content = content
     )
+}
+
+@Composable
+private fun StockConfigContent(
+    vm: MainViewModel,
+    state: com.abk.kernel.viewmodel.MainUiState,
+    rootGranted: Boolean
+) {
+    val deviceInfo = state.stockConfigDeviceInfo
+    val isExtracting = state.stockConfigExtracting
+    val needLogin = state.isLoggedIn && state.forkRepo != null
+    val isEnabled = state.buildConfig.stockConfigEnabled
+    val configId = deviceInfo?.configId ?: ""
+
+    // Auto-detect device on first load
+    LaunchedEffect(Unit) {
+        if (deviceInfo == null) vm.detectDeviceModel()
+    }
+
+    // File picker for boot.img
+    val bootImgPicker = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { vm.extractFromBootImage(it) }
+    }
+
+    // ── Device info card ────────────────────────────────────────────
+    if (deviceInfo != null) {
+        ExpressiveSectionCard(
+            title = "当前设备: ${deviceInfo.displayName}",
+            subtitle = "${deviceInfo.manufacturer} · ${deviceInfo.product} · ${deviceInfo.board}\n指纹: ${deviceInfo.fingerprint}",
+            icon = Icons.Default.PhoneAndroid
+        ) {
+            // Toggle: apply stock_config
+            SwitchRow(
+                label = "应用 stock_config",
+                checked = isEnabled,
+                onCheckedChange = { vm.toggleStockConfig(it) }
+            )
+            if (isEnabled) {
+                Text(
+                    text = "构建时将自动从当前 fork 的 ABK 仓库 config/stock_config/ 目录应用 ${configId}_stock_config",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    } else {
+        // Loading state
+        ExpressiveSectionCard(
+            title = "识别设备中…",
+            subtitle = "正在获取本机型号信息",
+            icon = Icons.Default.PhoneAndroid
+        ) { }
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // ── Extract & push section ──────────────────────────────────────
+    Text(
+        text = "提取并推送 config 到当前 fork 的 ABK 仓库",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ── /proc/config ──
+        OutlinedButton(
+            onClick = { vm.extractFromProc() },
+            modifier = Modifier.weight(1f).height(42.dp),
+            enabled = needLogin && !isExtracting
+        ) {
+            Icon(
+                if (isExtracting) Icons.Default.Refresh else Icons.Default.Terminal,
+                null, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (isExtracting) "提取中…" else "/proc/config",
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+        // ── boot.img ──
+        OutlinedButton(
+            onClick = { bootImgPicker.launch(arrayOf("*/*")) },
+            modifier = Modifier.weight(1f).height(42.dp),
+            enabled = needLogin && rootGranted && !isExtracting
+        ) {
+            Icon(Icons.Default.Archive, null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (!rootGranted) "需要 Root"
+                else if (isExtracting) "提取中…"
+                else "boot.img",
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+    }
+
+    // ── Login needed warning ────────────────────────────────────────
+    if (!needLogin && deviceInfo != null) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "需要登录 GitHub 并 fork 仓库才能提取和推送 config",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+
+    // ── Push success indicator ──────────────────────────────────────
+    state.stockConfigLastPath?.let { path ->
+        if (!isExtracting) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("推送成功", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+
+    // ── Error ───────────────────────────────────────────────────────
+    state.stockConfigError?.let { error ->
+        if (!isExtracting) {
+            Spacer(Modifier.height(4.dp))
+            Text(text = error, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+
+    // ── Loading ─────────────────────────────────────────────────────
+    if (isExtracting) {
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
 }
 
 @Composable
