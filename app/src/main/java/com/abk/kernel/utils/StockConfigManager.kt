@@ -68,8 +68,10 @@ object StockConfigManager {
         val deviceInfo: DeviceInfo,
         val configPath: String?,
         val output: List<String>,
+        val source: String = "",
         val pushed: Boolean = false
-    )
+    ) {
+    }
 
     fun detectDevice(): DeviceInfo {
         val model = Build.MODEL.trim()
