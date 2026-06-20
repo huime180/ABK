@@ -2752,7 +2752,11 @@ jobs:
           PY
           fi
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
+          # 如果启用了 stock_config，则删除 defconfig 中的 CONFIG_LSM
+          if [ "${{ inputs.stock_config }}" != '']; then
+             sed -i '/^CONFIG_LSM=/d' "$DEFCONFIG"
+          fi
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' "$DEFCONFIG"
 
       - name: 添加 DDK 防格机 LSM
         if: inputs.use_ddk
