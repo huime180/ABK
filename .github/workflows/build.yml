@@ -2756,7 +2756,7 @@ jobs:
           if [ "${{ inputs.stock_config }}" != '']; then
              sed -i '/^CONFIG_LSM=/d' "$DEFCONFIG"
           fi
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' "$DEFCONFIG"
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
       - name: 添加 DDK 防格机 LSM
         if: inputs.use_ddk
