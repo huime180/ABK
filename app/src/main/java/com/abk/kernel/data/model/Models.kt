@@ -117,6 +117,7 @@ data class BuildParameterSummary(
     val ksuVariant: String = "",
     val ksuBranch: String = "",
     val buildTime: String = "",
+    val addDefconfig: String = "",
     val susfsEnabled: String = "",
     val zramEnabled: String = "",
     val zramFullAlgo: String = "",
@@ -584,6 +585,7 @@ data class KernelBuildConfig(
     val customRef: String = "",
     val version: String = "",
     val buildTime: String = "",
+    val addDefconfig: String = "",
     val useZram: Boolean = false,
     val useBbg: Boolean = false,
     val useDdk: Boolean = false,
@@ -604,7 +606,9 @@ data class KernelBuildConfig(
     val onePlusUseLz4kd: Boolean = false,
     val onePlusUseBbr: Boolean = false,
     val onePlusUseProxyOptimization: Boolean = true,
-    val onePlusUseUnicodeBypass: Boolean = false
+    val onePlusUseUnicodeBypass: Boolean = false,
+    val stockConfigEnabled: Boolean = false,
+    val stockConfig: String = ""
 )
 
 data class AbkRuntimeStatus(
@@ -639,6 +643,8 @@ data class AbkRuntimeBuildInfo(
     @SerializedName("kernelsu_branch") val kernelsuBranch: String = "",
     val version: String = "",
     @SerializedName("build_time") val buildTime: String = "",
+    @SerializedName("add_defconfig") val addDefconfig: String = "",
+    @SerializedName("stock_config") val stockConfig: String = "",
     @SerializedName("virtualization_support") val virtualizationSupport: String = "",
     @SerializedName("zram_extra_algos") val zramExtraAlgos: String = "",
     val features: Map<String, Boolean> = emptyMap()

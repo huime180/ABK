@@ -182,7 +182,6 @@
   "arg_oneplus_8e": "OnePlus 8E サポートを有効にするニャ",
   "arg_ntsync": "NTsync を有効にするニャ",
   "arg_networking": "ネットワークを有効にするニャ (IPSet + BBR)",
-  "arg_zram_full_algo": "ZRAM 完全アルゴリズム",
   "arg_zram_extra_algos": "カスタム ZRAM アルゴリズム (カンマ区切り)",
   "arg_custom_modules": "カスタム外部モジュール (形式: url;stage|url;stage)",
   "arg_no_sync": "同期をスキップするニャ",

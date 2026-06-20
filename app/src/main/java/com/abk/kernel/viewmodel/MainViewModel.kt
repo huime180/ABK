@@ -34,6 +34,7 @@ import com.abk.kernel.utils.FailureLogExtractor
 import com.abk.kernel.utils.NotificationUtils
 import com.abk.kernel.utils.WorkflowStepI18n
 import com.abk.kernel.utils.RootUtils
+import com.abk.kernel.utils.StockConfigManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,12 @@ data class MainUiState(
     val validatingCustomExternalModule: Boolean = false,
     val customExternalModuleError: String? = null,
     val recommendedBuildConfig: KernelBuildConfig? = null,
+    // Stock Config
+    val stockConfigDeviceInfo: StockConfigManager.DeviceInfo? = null,
+    val stockConfigExtracting: Boolean = false,
+    val stockConfigLastPath: String? = null,
+    val stockConfigError: String? = null,
+    val stockConfigPendingPush: Boolean = false,
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -735,6 +742,126 @@ class MainViewModel @JvmOverloads constructor(
                     recommendedBuildConfig = recommended,
                     buildConfig = initialConfig ?: it.buildConfig
                 )
+            }
+        }
+    }
+
+    // ── Stock Config ────────────────────────────────────────────────────
+
+    /** Auto-detected on BuildScreen entry. */
+    fun detectDeviceModel() {
+        val info = StockConfigManager.detectDevice()
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = info,
+                stockConfigError = null
+            )
+        }
+        // auto-apply device to config if toggle is on
+        if (_uiState.value.buildConfig.stockConfigEnabled) {
+            applyDeviceToConfig(info.configId)
+        }
+    }
+
+    /** Toggle stock config on/off. When on, writes device codename into the build config. */
+    fun toggleStockConfig(enabled: Boolean) {
+        val config = _uiState.value.buildConfig
+        val device = _uiState.value.stockConfigDeviceInfo?.configId
+            ?: StockConfigManager.detectDevice().configId
+        updateBuildConfig(config.copy(
+            stockConfigEnabled = enabled,
+            stockConfig = if (enabled) device else ""
+        ))
+    }
+
+    private fun applyDeviceToConfig(deviceId: String) {
+        val config = _uiState.value.buildConfig
+        if (config.stockConfigEnabled && config.stockConfig != deviceId) {
+            updateBuildConfig(config.copy(stockConfig = deviceId))
+        }
+    }
+
+    // ── Extract & push ──────────────────────────────────────────────────
+
+    /** Extract from /proc/config and push to fork. */
+    fun extractFromProc() {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先登录 GitHub 并 fork 仓库") }
+            return
+        }
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.extractFromProcConfig(app, device.configId)
+                pushAndFinish(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    /** Extract from boot.img via SAF and push to fork. */
+    private suspend fun pushAndFinish(
+        app: Application,
+        result: StockConfigManager.StockConfigResult,
+        deviceId: String
+    ) {
+        _uiState.update {
+            it.copy(stockConfigLastPath = result.configPath,
+                stockConfigExtracting = false,
+                stockConfigError = if (result.success) null else result.output.lastOrNull(),
+                stockConfigPendingPush = result.success && result.configPath != null
+            )
+        }
+    }
+
+    fun confirmPushStockConfig() {
+        val path = _uiState.value.stockConfigLastPath ?: return
+        _uiState.update { it.copy(stockConfigPendingPush = false, stockConfigExtracting = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val token = prefs.accessToken.first() ?: ""
+            val owner = _uiState.value.forkRepo?.owner?.login ?: _uiState.value.user?.login ?: ""
+            val repo = _uiState.value.forkRepo?.name ?: ""
+            val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+            val device = _uiState.value.stockConfigDeviceInfo?.configId ?: ""
+            val pushed = if (token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank()) {
+                StockConfigManager.pushToFork(app, token, owner, repo, branch, device)
+            } else false
+            _uiState.update {
+                it.copy(stockConfigExtracting = false,
+                    stockConfigError = if (pushed) null else "推送失败")
+            }
+        }
+    }
+
+    fun cancelPushStockConfig() {
+        _uiState.update { it.copy(stockConfigPendingPush = false) }
+    }
+
+    fun fetchStockConfigFromUpstream() {
+        if (_uiState.value.stockConfigExtracting) return
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(stockConfigExtracting = true, stockConfigError = null) }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.fetchFromUpstream(app, device.configId)
+                _uiState.update {
+                    it.copy(
+                        stockConfigExtracting = false,
+                        stockConfigLastPath = result.configPath,
+                        stockConfigError = if (result.success) null else "上游仓库中未找到该机型的 stock_config"
+                    )
+                }
+                if (result.success && result.configPath != null) {
+                    applyDeviceToConfig(device.configId)
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
             }
         }
     }
@@ -4688,6 +4815,7 @@ internal fun encodeBuildPlanPayload(
     writer.writeVarInt(config.toBuildPlanFeatureMask())
     writer.writeString(config.version)
     writer.writeString(config.buildTime)
+    writer.writeString(config.addDefconfig)
     writer.writeString(config.zramExtraAlgos)
     writer.writeString(config.kpmPassword)
     writer.writeString(config.customRef)
@@ -4786,6 +4914,7 @@ internal fun decodeBuildPlanPayload(
     val featureMask = reader.readVarInt()
     val versionName = reader.readString()
     val buildTime = reader.readString()
+    val addDefconfig = reader.readString()
     val zramExtraAlgos = reader.readString()
     val kpmPassword = reader.readString()
     val customRef = if (version >= BUILD_PLAN_CUSTOM_REF_VERSION) {
@@ -4827,6 +4956,7 @@ internal fun decodeBuildPlanPayload(
         kernelsuBranch = ksuBranch,
         version = versionName,
         buildTime = buildTime,
+        addDefconfig = addDefconfig,
         useZram = featureMask.hasBuildPlanFlag(0),
         useBbg = featureMask.hasBuildPlanFlag(1),
         useDdk = featureMask.hasBuildPlanFlag(2),
@@ -4836,7 +4966,6 @@ internal fun decodeBuildPlanPayload(
         useRekernel = featureMask.hasBuildPlanFlag(6),
         cancelSusfs = featureMask.hasBuildPlanFlag(7),
         suppOp = featureMask.hasBuildPlanFlag(8),
-        zramFullAlgo = featureMask.hasBuildPlanFlag(9),
         zramExtraAlgos = zramExtraAlgos,
         kpmPassword = kpmPassword,
         customRef = customRef,
@@ -4941,12 +5070,11 @@ private fun KernelBuildConfig.toBuildPlanFeatureMask(): Int {
     set(6, useRekernel)
     set(7, cancelSusfs)
     set(8, suppOp)
-    set(9, zramFullAlgo)
-    set(10, useCustomExternalModules)
-    set(11, onePlusUseLz4kd)
-    set(12, onePlusUseBbr)
-    set(13, onePlusUseProxyOptimization)
-    set(14, onePlusUseUnicodeBypass)
+    set(9, useCustomExternalModules)
+    set(10, onePlusUseLz4kd)
+    set(11, onePlusUseBbr)
+    set(12, onePlusUseProxyOptimization)
+    set(13, onePlusUseUnicodeBypass)
     return mask
 }
 
@@ -5002,9 +5130,9 @@ private const val SUMMARY_LABEL_PATCH_LEVEL = "\u8865\u4e01\u7ea7\u522b"
 private const val SUMMARY_LABEL_KSU_VARIANT = "ksu\u53d8\u4f53"
 private const val SUMMARY_LABEL_KSU_BRANCH = "ksu\u5206\u652f"
 private const val SUMMARY_LABEL_BUILD_TIME = "\u6784\u5efa\u65f6\u95f4"
+private const val SUMMARY_LABEL_ADD_DEFCONFIG = "\u989d\u5916\u5185\u6838\u53c2\u6570"
 private const val SUMMARY_LABEL_SUSFS_STATUS = "susfs\u72b6\u6001"
 private const val SUMMARY_LABEL_ZRAM = "zram\u589e\u5f3a"
-private const val SUMMARY_LABEL_ZRAM_FULL_ALGO = "zram\u5b8c\u6574\u7b97\u6cd5"
 private const val SUMMARY_LABEL_ZRAM_EXTRA_ALGOS = "zram\u989d\u5916\u7b97\u6cd5"
 private const val SUMMARY_LABEL_BBG = "bbg\u8865\u4e01"
 private const val SUMMARY_LABEL_NTSYNC = "ntsync\u8865\u4e01"
@@ -5071,9 +5199,9 @@ internal fun parseBuildParameterSummary(
         ksuVariant = values["ksuVariant"].orEmpty(),
         ksuBranch = values["ksuBranch"].orEmpty(),
         buildTime = values["buildTime"].orEmpty(),
+        addDefconfig = values["addDefconfig"].orEmpty(),
         susfsEnabled = values["susfsEnabled"].orEmpty(),
         zramEnabled = values["zramEnabled"].orEmpty(),
-        zramFullAlgo = values["zramFullAlgo"].orEmpty(),
         zramExtraAlgos = values["zramExtraAlgos"].orEmpty(),
         bbgEnabled = values["bbgEnabled"].orEmpty(),
         ddkLsm = values["ddkLsm"].orEmpty(),
@@ -5106,9 +5234,9 @@ private fun normalizeBuildSummaryLabel(label: String): String? {
         compact.contains(SUMMARY_LABEL_KSU_VARIANT) -> "ksuVariant"
         compact.contains(SUMMARY_LABEL_KSU_BRANCH) -> "ksuBranch"
         compact.contains(SUMMARY_LABEL_BUILD_TIME) -> "buildTime"
+        compact.contains(SUMMARY_LABEL_ADD_DEFCONFIG) -> "addDefconfig"
         compact.contains(SUMMARY_LABEL_SUSFS_STATUS) -> "susfsEnabled"
         compact.contains(SUMMARY_LABEL_ZRAM) -> "zramEnabled"
-        compact.contains(SUMMARY_LABEL_ZRAM_FULL_ALGO) -> "zramFullAlgo"
         compact.contains(SUMMARY_LABEL_ZRAM_EXTRA_ALGOS) -> "zramExtraAlgos"
         compact.contains(SUMMARY_LABEL_BBG) -> "bbgEnabled"
         compact.contains("ddklsm") -> "ddkLsm"
@@ -5305,6 +5433,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "kernelsu_branch" to config.kernelsuBranch,
         "version" to config.version,
         "build_time" to config.buildTime,
+        "add_defconfig" to config.addDefconfig,
         "use_zram" to config.useZram.toString(),
         "use_bbg" to config.useBbg.toString(),
         "use_ddk" to config.useDdk.toString(),
@@ -5314,11 +5443,14 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "use_rekernel" to config.useRekernel.toString(),
         "cancel_susfs" to config.cancelSusfs.toString(),
         "supp_op" to config.suppOp.toString(),
-        "zram_full_algo" to config.zramFullAlgo.toString(),
-        "zram_extra_algos" to config.zramExtraAlgos,
+        "zram_algos" to when {
+            config.zramFullAlgo -> "full"
+            config.zramExtraAlgos.isNotBlank() -> config.zramExtraAlgos
+            else -> ""
+        },
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
-        "use_custom_external_modules" to config.useCustomExternalModules.toString(),
+        "stock_config" to config.stockConfig.trim(),
         "custom_ref" to if (config.kernelsuBranch == KSU_BRANCH_CUSTOM) {
             config.customRef.trim()
         } else {

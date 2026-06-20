@@ -50,6 +50,10 @@ on:
         required: false
         type: boolean
         default: false
+      stock_config:
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -183,7 +187,7 @@ jobs:
           echo "Re-Kernel     : false"
           echo "虚拟化支持   : off"
           echo "自定义注入    : 无"
-          echo "Stock Config  : OnePlus manifest"
+          echo "Stock Config  : ${{ inputs.stock_config || '无' }}"
           echo "Unicode 绕过  : $USE_UNICODE_BYPASS"
           echo "========================================"
 
@@ -284,6 +288,25 @@ jobs:
             -m "${DEVICE_MANIFEST}.xml" \
             --depth=1
           repo sync -c -j"$(nproc --all)" --no-tags --no-clone-bundle --force-sync
+
+      - name: 应用 Stock Config
+        if: inputs.stock_config != ''
+        run: |
+          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_config/${{ inputs.stock_config }}_stock_config"
+
+          if [ ! -f "$STOCK_SRC" ]; then
+            echo "::warning::未找到 $STOCK_SRC，跳过 Stock Config 伪装。"
+            exit 0
+          fi
+
+          WORKSPACE="$GITHUB_WORKSPACE/oneplus_workspace"
+          STOCK_DST="$WORKSPACE/kernel_workspace/kernel_platform/common/arch/arm64/configs/stock_defconfig"
+          mkdir -p "$(dirname "$STOCK_DST")"
+          if ! cp "$STOCK_SRC" "$STOCK_DST"; then
+            echo "::error::复制 stock_defconfig 失败: $STOCK_SRC -> $STOCK_DST"
+            exit 1
+          fi
+          echo "已复制 ${{ inputs.stock_config }}_stock_config -> $STOCK_DST"
 
       - name: 准备 KernelSU 和补丁
         shell: bash
@@ -704,6 +727,13 @@ jobs:
           CONFIG_KSU_MANUAL_HOOK=y
           EOF
             fi
+          fi
+
+          # Merge stock_defconfig if available
+          STOCK_DEFCONFIG="$COMMON_ROOT/arch/arm64/configs/stock_defconfig"
+          if [ -f "$STOCK_DEFCONFIG" ]; then
+            echo "合并 stock_defconfig 到 gki_defconfig …"
+            grep '^CONFIG_' "$STOCK_DEFCONFIG" >> "$DEFCONFIG_PATH" 2>/dev/null || true
           fi
 
           cat >> "$DEFCONFIG_PATH" <<'EOF'

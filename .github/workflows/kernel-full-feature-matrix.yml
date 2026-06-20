@@ -57,16 +57,10 @@ on:
         required: false
         type: boolean
         default: true
-      zram_full_algo:
-        description: "启用 ZRAM 完整算法支持（6.12 会自动关闭）"
-        required: false
-        type: boolean
-        default: true
-      zram_extra_algos:
-        description: "自定义 ZRAM 算法（逗号分隔，仅未启用完整算法时生效）"
+      zram_algos:
         required: false
         type: string
-        default: ""
+        default: true
       use_bbg:
         description: "启用 BBG 防格机"
         required: false
@@ -113,11 +107,6 @@ on:
           - "123"
           - "345"
         default: "off"
-      use_custom_external_modules:
-        description: "启用自定义外部模块注入"
-        required: false
-        type: boolean
-        default: false
       custom_external_modules:
         description: "自定义外部模块（兼容旧 repo;stage，也支持 module:repo;stage 与 set:repo#child;stage，用 | 分隔）"
         required: false
@@ -165,18 +154,10 @@ on:
         required: false
         type: boolean
         default: true
-      zram_full_algo:
-        required: false
-        type: boolean
-        default: true
-      zram_extra_algos:
+      zram_algos:
         required: false
         type: string
         default: ""
-      use_bbg:
-        required: false
-        type: boolean
-        default: true
       use_ddk:
         required: false
         type: boolean
@@ -205,10 +186,6 @@ on:
         required: false
         type: string
         default: "off"
-      use_custom_external_modules:
-        required: false
-        type: boolean
-        default: false
       custom_external_modules:
         required: false
         type: string
@@ -245,9 +222,7 @@ jobs:
           MATRIX_BUILD_TIME: ${{ inputs.build_time || '' }}
           MATRIX_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
           MATRIX_USE_ZRAM: ${{ inputs.use_zram }}
-          MATRIX_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
-          MATRIX_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos || '' }}
-          MATRIX_USE_BBG: ${{ inputs.use_bbg }}
+          MATRIX_ZRAM_ALGOS: ${{ inputs.zram_algos || 'full' }}
           MATRIX_USE_DDK: ${{ inputs.use_ddk }}
           MATRIX_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
           MATRIX_USE_NTSYNC: ${{ inputs.use_ntsync }}
@@ -256,7 +231,6 @@ jobs:
           MATRIX_KPM_PASSWORD: ${{ inputs.kpm_password || '' }}
           MATRIX_USE_REKERNEL: ${{ inputs.use_rekernel }}
           MATRIX_SUPP_OP: ${{ inputs.supp_op }}
-          MATRIX_USE_CUSTOM_EXTERNAL_MODULES: ${{ inputs.use_custom_external_modules }}
           MATRIX_CUSTOM_EXTERNAL_MODULES: ${{ inputs.custom_external_modules || '' }}
           MATRIX_UPLOAD_AUX_ARTIFACTS: ${{ inputs.upload_aux_artifacts }}
         run: |
@@ -344,8 +318,7 @@ jobs:
               summary.write(f"- 构建时间: {env_value('MATRIX_BUILD_TIME', '当前 UTC')}\n")
               summary.write(f"- SUSFS: {env_enabled('MATRIX_ENABLE_SUSFS')}\n")
               summary.write(f"- ZRAM: {env_enabled('MATRIX_USE_ZRAM')}（6.12 自动 off）\n")
-              summary.write(f"- ZRAM 完整算法: {env_enabled('MATRIX_ZRAM_FULL_ALGO')}（6.12 自动 off）\n")
-              summary.write(f"- ZRAM 额外算法: {env_value('MATRIX_ZRAM_EXTRA_ALGOS')}\n")
+              summary.write(f"- ZRAM 额外算法: {env_value('MATRIX_ZRAM_ALGOS')}\n")
               summary.write(f"- BBG: {env_enabled('MATRIX_USE_BBG')}\n")
               summary.write(f"- DDK LSM: {env_enabled('MATRIX_USE_DDK')}\n")
               summary.write(f"- 虚拟化支持: {env_value('MATRIX_VIRTUALIZATION_SUPPORT', 'off')}\n")
@@ -355,7 +328,6 @@ jobs:
               summary.write(f"- KPM 密码: {'已自定义' if os.environ.get('MATRIX_EFFECTIVE_KPM_PASSWORD', '') else '默认'}\n")
               summary.write(f"- Re-Kernel: {env_enabled('MATRIX_USE_REKERNEL')}\n")
               summary.write(f"- 一加 8E: {env_enabled('MATRIX_SUPP_OP')}\n")
-              summary.write(f"- 自定义外部模块: {env_enabled('MATRIX_USE_CUSTOM_EXTERNAL_MODULES')}\n")
               summary.write(f"- 自定义外部模块参数: {env_value('MATRIX_CUSTOM_EXTERNAL_MODULES')}\n")
               summary.write(f"- 上传辅助产物: {env_enabled('MATRIX_UPLOAD_AUX_ARTIFACTS')}\n")
               summary.write("- Android16/6.12: ZRAM off\n")
@@ -396,10 +368,8 @@ jobs:
       enable_susfs: ${{ inputs.enable_susfs }}
       supp_op: ${{ inputs.supp_op }}
       virtualization_support: ${{ inputs.virtualization_support == 'off' && 'off' || (matrix.kernel_version == '6.12' && 'on' || (inputs.virtualization_support == 'on' && '678' || inputs.virtualization_support)) }}
-      zram_full_algo: ${{ inputs.zram_full_algo && matrix.kernel_version != '6.12' }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.use_kpm && (inputs.kernelsu_variant == 'SukiSU' || (inputs.kernelsu_variant == 'ReSukiSU' && (inputs.kernelsu_branch == 'Stable(标准)' || inputs.kernelsu_branch == 'Custom(自定义)'))) && inputs.kpm_password || '' }}
-      use_custom_external_modules: ${{ inputs.use_custom_external_modules }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
       upload_aux_artifacts: ${{ inputs.upload_aux_artifacts }}
 
@@ -423,15 +393,12 @@ jobs:
       BUILD_TIME: ${{ inputs.build_time || '当前 UTC' }}
       ENABLE_SUSFS: ${{ inputs.enable_susfs }}
       USE_ZRAM: ${{ inputs.use_zram }}
-      ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
-      ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos || '' }}
-      USE_BBG: ${{ inputs.use_bbg }}
+      ZRAM_ALGOS: ${{ inputs.zram_algos || 'full' }}
       USE_DDK: ${{ inputs.use_ddk }}
       KPM_PASSWORD: ${{ inputs.use_kpm && (inputs.kernelsu_variant == 'SukiSU' || (inputs.kernelsu_variant == 'ReSukiSU' && (inputs.kernelsu_branch == 'Stable(标准)' || inputs.kernelsu_branch == 'Custom(自定义)'))) && inputs.kpm_password || '' }}
       USE_KPM: ${{ inputs.use_kpm && (inputs.kernelsu_variant == 'SukiSU' || (inputs.kernelsu_variant == 'ReSukiSU' && (inputs.kernelsu_branch == 'Stable(标准)' || inputs.kernelsu_branch == 'Custom(自定义)'))) }}
       USE_REKERNEL: ${{ inputs.use_rekernel }}
       SUPP_OP: ${{ inputs.supp_op }}
-      USE_CUSTOM_EXTERNAL_MODULES: ${{ inputs.use_custom_external_modules }}
       CUSTOM_EXTERNAL_MODULES: ${{ inputs.custom_external_modules || '' }}
       USE_NTSYNC: ${{ inputs.use_ntsync }}
       USE_NETWORKING: ${{ inputs.use_networking }}
@@ -461,10 +428,10 @@ jobs:
             revision_label="无"
           fi
 
-          if [ -n "$ZRAM_EXTRA_ALGOS" ]; then
-            zram_extra_algos_label="$ZRAM_EXTRA_ALGOS"
+          if [ -n "$ZRAM_ALGOS" ]; then
+            zram_algos_label="$ZRAM_ALGOS"
           else
-            zram_extra_algos_label="无"
+            zram_algos_label="无"
           fi
 
           if [ -n "$CUSTOM_EXTERNAL_MODULES" ]; then
@@ -488,15 +455,13 @@ jobs:
               --arg build_time "$BUILD_TIME" \
               --arg susfs_enabled "$ENABLE_SUSFS" \
               --arg use_zram "$USE_ZRAM" \
-              --arg zram_full_algo "$ZRAM_FULL_ALGO" \
-              --arg zram_extra_algos "$zram_extra_algos_label" \
+              --arg zram_algos "$ZRAM_ALGOS" \
               --arg use_bbg "$USE_BBG" \
               --arg use_ddk "$USE_DDK" \
               --arg use_kpm "$USE_KPM" \
               --arg kpm_password "$kpm_password_label" \
               --arg use_rekernel "$USE_REKERNEL" \
               --arg supp_op "$SUPP_OP" \
-              --arg use_custom_external_modules "$USE_CUSTOM_EXTERNAL_MODULES" \
               --arg custom_external_modules "$custom_modules_label" \
               --arg use_ntsync "$USE_NTSYNC" \
               --arg use_networking "$USE_NETWORKING" \
@@ -510,15 +475,13 @@ jobs:
                 build_time: $build_time,
                 susfs_enabled: $susfs_enabled,
                 use_zram: $use_zram,
-                zram_full_algo: $zram_full_algo,
-                zram_extra_algos: $zram_extra_algos,
+                zram_algos: $zram_algos,
                 use_bbg: $use_bbg,
                 use_ddk: $use_ddk,
                 use_kpm: $use_kpm,
                 kpm_password: $kpm_password,
                 use_rekernel: $use_rekernel,
                 supp_op: $supp_op,
-                use_custom_external_modules: $use_custom_external_modules,
                 custom_external_modules: $custom_external_modules,
                 use_ntsync: $use_ntsync,
                 use_networking: $use_networking,
@@ -555,7 +518,6 @@ jobs:
             echo "- KPM: ${USE_KPM}"
             echo "- Re-Kernel: ${USE_REKERNEL}"
             echo "- 一加 8E: ${SUPP_OP}"
-            echo "- 自定义注入: ${USE_CUSTOM_EXTERNAL_MODULES}"
             echo "- 自定义注入参数列表: ${custom_modules_label}"
             echo "- 上传辅助产物: ${UPLOAD_AUX_ARTIFACTS}"
           } >> "$GITHUB_STEP_SUMMARY"

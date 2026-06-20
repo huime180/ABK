@@ -73,6 +73,10 @@ on:
         description: "自定义引用 (仅在KSU分支为'Custom(自定义)'时使用)"
         required: false
         type: string
+      add_defconfig:
+        description: "自定义内核参数"
+        required: false
+        type: string
       version:
         description: "自定义版本名 (可选)"
         required: false
@@ -144,13 +148,8 @@ on:
         default: false
 
       # ==================== ZRAM 扩展选项 ====================
-      zram_full_algo:
-        description: "启用 ZRAM 完整算法支持（LZO/LZ4/LZ4HC/LZ4K/LZ4KD/DEFLATE/842/ZSTD，默认 lzo-rle）"
-        required: false
-        type: boolean
-        default: false
-      zram_extra_algos:
-        description: "自定义 ZRAM 算法（逗号分隔，如 lzo,lz4,deflate,zstd；仅在未启用完整算法时生效）"
+      zram_algos:
+        description: "ZRAM 算法: 留空=默认 | 输入'full'启用完整算法 | 输入逗号分隔算法名(如 lzo,lz4,deflate,zstd)"
         required: false
         type: string
         default: ""
@@ -163,13 +162,13 @@ on:
         default: ""
 
       # ==================== 自定义外部模块 ====================
-      use_custom_external_modules:
-        description: "启用自定义外部模块注入"
-        required: false
-        type: boolean
-        default: false
       custom_external_modules:
         description: "自定义外部模块（兼容旧 repo;stage，也支持 module:repo;stage 与 set:repo#child;stage，用 | 分隔）"
+        required: false
+        type: string
+        default: ""
+      stock_config:
+        description: "Stock Config 机型代号（从 config/stock_config/<代号>_stock_config 加载）"
         required: false
         type: string
         default: ""
@@ -188,6 +187,7 @@ jobs:
       ksu_variant: ${{ inputs.kernelsu_variant }}
       ksu_branch: ${{ inputs.kernelsu_branch }}
       custom_ref: ${{ inputs.custom_ref || '' }}
+      add_defconfig: ${{ inputs.add_defconfig || '' }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
       use_zram: ${{ inputs.use_zram }}
@@ -200,11 +200,10 @@ jobs:
       supp_op: ${{ inputs.supp_op || false }}
       enable_susfs: ${{ !inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support || 'off' }}
-      zram_full_algo: ${{ inputs.zram_full_algo || false }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
-      use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}
+      stock_config: ${{ inputs.stock_config || '' }}
 
   get-ksu-manager:
     uses: ./.github/workflows/get-manager.yml

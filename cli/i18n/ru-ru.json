@@ -183,7 +183,6 @@
   "arg_oneplus_8e": "Включить поддержку OnePlus 8E",
   "arg_ntsync": "Включить NTsync",
   "arg_networking": "Включить сеть (IPSet + BBR)",
-  "arg_zram_full_algo": "Полные алгоритмы ZRAM",
   "arg_zram_extra_algos": "Пользовательские алгоритмы ZRAM (через запятую)",
   "arg_custom_modules": "Пользовательские модули (формат: url;stage|url;stage)",
   "arg_no_sync": "Пропустить синхронизацию",

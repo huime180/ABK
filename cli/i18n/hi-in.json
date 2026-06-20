@@ -182,7 +182,6 @@
   "arg_oneplus_8e": "OnePlus 8E समर्थन सक्षम करें",
   "arg_ntsync": "NTsync सक्षम करें",
   "arg_networking": "नेटवर्किंग सक्षम करें (IPSet + BBR)",
-  "arg_zram_full_algo": "ZRAM पूर्ण एल्गोरिदम",
   "arg_zram_extra_algos": "कस्टम ZRAM एल्गोरिदम (अल्पविराम से अलग)",
   "arg_custom_modules": "कस्टम बाहरी मॉड्यूल (प्रारूप: url;stage|url;stage)",
   "arg_no_sync": "सिंक छोड़ें",

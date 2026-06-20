@@ -182,7 +182,6 @@
   "arg_oneplus_8e": "Ebligi OnePlus 8E subtenon",
   "arg_ntsync": "Ebligi NTsync",
   "arg_networking": "Ebligi retadon (IPSet + BBR)",
-  "arg_zram_full_algo": "Plenaj ZRAM-algoritmoj",
   "arg_zram_extra_algos": "Propraj ZRAM-algoritmoj (apartigitaj per komo)",
   "arg_custom_modules": "Propraj eksteraj moduloj (formato: url;stage|url;stage)",
   "arg_no_sync": "Preterpasi sinkronigon",

@@ -90,16 +90,10 @@ on:
         required: true
         type: boolean
         default: false
-      zram_full_algo:
-        description: "启用 ZRAM 完整算法支持（LZO/LZ4/LZ4HC/LZ4K/LZ4KD/DEFLATE/842/ZSTD，默认 lzo-rle）"
-        required: false
-        type: boolean
-        default: false
-      zram_extra_algos:
-        description: "自定义 ZRAM 算法（逗号分隔，如 lzo,lz4,deflate,zstd；仅在未启用完整算法时生效）"
+      zram_algos:
         required: false
         type: string
-        default: ""
+        default: false
       kpm_password:
         description: "自定义 KPM 超级密码（留空=使用默认密码）"
         required: false
@@ -166,15 +160,7 @@ on:
         required: false
         type: string
         default: "off"
-      zram_full_algo:
-        required: false
-        type: boolean
-        default: false
-      zram_extra_algos:
-        required: false
-        type: string
-        default: ""
-      kpm_password:
+      zram_algos:
         required: false
         type: string
         default: ""
@@ -267,8 +253,7 @@ jobs:
       supp_op: false
       enable_susfs: ${{ !inputs.cancel_susfs }}
       virtualization_support: ${{ inputs.virtualization_support || 'off' }}
-      zram_full_algo: ${{ inputs.zram_full_algo || false }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos || '' }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       kpm_password: ${{ inputs.kpm_password || '' }}
       use_custom_external_modules: ${{ inputs.use_custom_external_modules || false }}
       custom_external_modules: ${{ inputs.custom_external_modules || '' }}

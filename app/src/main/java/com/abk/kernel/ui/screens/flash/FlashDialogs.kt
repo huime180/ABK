@@ -356,7 +356,6 @@ internal fun ParameterSummarySections(summary: BuildParameterSummary) {
     }
     ParameterSection(stringResource(R.string.flash_patches_features)) {
         ParameterRow(stringResource(R.string.flash_zram), summary.zramEnabled)
-        ParameterRow(stringResource(R.string.flash_zram_full_algo), summary.zramFullAlgo)
         ParameterRow(stringResource(R.string.flash_zram_extra_algos), summary.zramExtraAlgos)
         ParameterRow(stringResource(R.string.flash_bbg_patch), summary.bbgEnabled)
         ParameterRow("DDK LSM", summary.ddkLsm)
@@ -477,7 +476,6 @@ internal fun parsePrebuiltGkiParameterSummary(release: PrebuiltGkiRelease): Buil
         buildTime = values["buildTime"].orEmpty(),
         susfsEnabled = values["susfsEnabled"].orEmpty(),
         zramEnabled = values["zramEnabled"].orEmpty(),
-        zramFullAlgo = values["zramFullAlgo"].orEmpty(),
         zramExtraAlgos = values["zramExtraAlgos"].orEmpty(),
         bbgEnabled = values["bbgEnabled"].orEmpty(),
         ddkLsm = values["ddkLsm"].orEmpty(),
@@ -542,7 +540,6 @@ internal fun normalizeReleaseParameterLabel(label: String): String? {
         compact.contains("构建时间") -> "buildTime"
         compact.contains("susfs状态") -> "susfsEnabled"
         compact.contains("zram增强") -> "zramEnabled"
-        compact.contains("zram完整算法") -> "zramFullAlgo"
         compact.contains("zram额外算法") -> "zramExtraAlgos"
         compact.contains("bbg补丁") -> "bbgEnabled"
         compact.contains("ddklsm") -> "ddkLsm"

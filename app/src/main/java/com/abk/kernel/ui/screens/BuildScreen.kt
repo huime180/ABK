@@ -1587,7 +1587,22 @@ fun BuildScreen(
                 }
             }
 
+            SectionCard(section = BuildSection.StockConfig) {
+                StockConfigContent(
+                    vm = vm,
+                    state = state,
+                    rootGranted = state.rootGranted
+                )
+            }
+
             SectionCard(section = BuildSection.OptionalConfig) {
+                OutlinedTextField(
+                    value = config.addDefconfig,
+                    onValueChange = { vm.updateBuildConfig(config.copy(addDefconfig = it)) },
+                    label = { Text(stringResource(R.string.build_add_defconfig)) },
+                    placeholder = { Text(stringResource(R.string.build_add_defconfig_placeholder)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
                 OutlinedTextField(
                     value = config.version,
                     onValueChange = { vm.updateBuildConfig(config.copy(version = it)) },
@@ -1605,7 +1620,6 @@ fun BuildScreen(
                     singleLine = true
                 )
                 ConfigPreviewText(buildTimePreview)
-            }
             }
 
             // Submit button
@@ -1714,6 +1728,7 @@ fun BuildScreen(
             }
         }
     }
+}
 }
 
 @Composable
@@ -3018,6 +3033,7 @@ private enum class BuildSection {
     ZramOptions,
     KpmOptions,
     CustomModules,
+    StockConfig,
     OptionalConfig
 }
 
@@ -3031,6 +3047,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_zram_options)
             BuildSection.KpmOptions -> stringResource(R.string.build_kpm_options)
             BuildSection.CustomModules -> stringResource(R.string.build_custom_modules)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_title)
             BuildSection.OptionalConfig -> stringResource(R.string.build_optional_config)
         },
         subtitle = when (section) {
@@ -3040,6 +3057,7 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> stringResource(R.string.build_section_zram_desc)
             BuildSection.KpmOptions -> stringResource(R.string.build_section_kpm_desc)
             BuildSection.CustomModules -> stringResource(R.string.build_section_custom_modules_desc)
+            BuildSection.StockConfig -> stringResource(R.string.build_stock_config_desc)
             BuildSection.OptionalConfig -> stringResource(R.string.build_section_default_desc)
         },
         icon = when (section) {
@@ -3049,10 +3067,155 @@ private fun SectionCard(section: BuildSection, content: @Composable ColumnScope.
             BuildSection.ZramOptions -> Icons.Default.Compress
             BuildSection.KpmOptions -> Icons.Default.Key
             BuildSection.CustomModules -> Icons.Default.Extension
+            BuildSection.StockConfig -> Icons.Default.PhoneAndroid
             else -> Icons.Default.Edit
         },
         content = content
     )
+}
+
+@Composable
+private fun StockConfigContent(
+    vm: MainViewModel,
+    state: com.abk.kernel.viewmodel.MainUiState,
+    rootGranted: Boolean
+) {
+    val deviceInfo = state.stockConfigDeviceInfo
+    val isExtracting = state.stockConfigExtracting
+    val needLogin = state.isLoggedIn && state.forkRepo != null
+    val isEnabled = state.buildConfig.stockConfigEnabled
+    val configId = deviceInfo?.configId ?: ""
+
+    // Auto-detect device on first load
+    LaunchedEffect(Unit) {
+        if (deviceInfo == null) vm.detectDeviceModel()
+    }
+
+    // ── Device info card ────────────────────────────────────────────
+    if (deviceInfo != null) {
+        ExpressiveSectionCard(
+            title = "当前设备: ${deviceInfo.displayName}",
+            subtitle = "${deviceInfo.manufacturer} · ${deviceInfo.product} · ${deviceInfo.board}\n指纹: ${deviceInfo.fingerprint}",
+            icon = Icons.Default.PhoneAndroid
+        ) {
+            // Toggle: apply stock_config
+            SwitchRow(
+                label = "应用 stock_config",
+                checked = isEnabled,
+                onCheckedChange = { vm.toggleStockConfig(it) }
+            )
+            if (isEnabled) {
+                Text(
+                    text = "构建时将自动从当前 fork 的 ABK 仓库 config/stock_config/ 目录应用 ${configId}_stock_config",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    } else {
+        // Loading state
+        ExpressiveSectionCard(
+            title = "识别设备中…",
+            subtitle = "正在获取本机型号信息",
+            icon = Icons.Default.PhoneAndroid
+        ) { }
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // ── Extract & push section ──────────────────────────────────────
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "提取并推送 config",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(
+            onClick = { vm.fetchStockConfigFromUpstream() },
+            enabled = !isExtracting,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("恢复", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ── /proc/config ──
+        OutlinedButton(
+            onClick = { vm.extractFromProc() },
+            modifier = Modifier.weight(1f).height(42.dp),
+            enabled = needLogin && !isExtracting
+        ) {
+            Icon(
+                if (isExtracting) Icons.Default.Refresh else Icons.Default.Terminal,
+                null, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (isExtracting) "提取中…" else "/proc/config",
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+    }
+
+    // ── Login needed warning ────────────────────────────────────────
+    if (!needLogin && deviceInfo != null) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "需要登录 GitHub 并 fork 仓库才能提取和推送 config",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+
+    // ── Push confirmation dialog ───────────────────────────────────
+    if (state.stockConfigPendingPush) {
+        AlertDialog(
+            onDismissRequest = { vm.cancelPushStockConfig() },
+            icon = { Icon(Icons.Default.CloudUpload, null) },
+            title = { Text("确认推送") },
+            text = { Text("已提取 stock_config，是否推送到当前 fork 的 ABK 仓库？") },
+            confirmButton = {
+                Button(onClick = { vm.confirmPushStockConfig() }) {
+                    Text("推送")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.cancelPushStockConfig() }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── Push success indicator ──────────────────────────────────────
+    state.stockConfigLastPath?.let { path ->
+        if (!isExtracting && !state.stockConfigPendingPush) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("推送成功", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+
+    // ── Error ───────────────────────────────────────────────────────
+    state.stockConfigError?.let { error ->
+        if (!isExtracting) {
+            Spacer(Modifier.height(4.dp))
+            Text(text = error, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+
+    // ── Loading ─────────────────────────────────────────────────────
+    if (isExtracting) {
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
 }
 
 @Composable

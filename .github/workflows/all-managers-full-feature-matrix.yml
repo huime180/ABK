@@ -61,16 +61,10 @@ on:
         required: false
         type: boolean
         default: true
-      zram_full_algo:
-        description: "GKI 启用 ZRAM 完整算法支持（6.12 会自动关闭）"
-        required: false
-        type: boolean
-        default: true
-      zram_extra_algos:
-        description: "GKI 自定义 ZRAM 算法（逗号分隔，仅未启用完整算法时生效）"
+      zram_algos:
         required: false
         type: string
-        default: ""
+        default: true
       use_bbg:
         description: "GKI 启用 BBG 防格机"
         required: false
@@ -275,8 +269,7 @@ jobs:
       kpm_password: ${{ inputs.kpm_password }}
       enable_susfs: ${{ inputs.enable_susfs }}
       use_zram: ${{ inputs.use_zram }}
-      zram_full_algo: ${{ inputs.zram_full_algo }}
-      zram_extra_algos: ${{ inputs.zram_extra_algos }}
+      zram_algos: ${{ inputs.zram_algos || '' }}
       use_bbg: ${{ inputs.use_bbg }}
       use_ddk: ${{ inputs.use_ddk }}
       use_ntsync: ${{ inputs.use_ntsync }}
@@ -285,7 +278,6 @@ jobs:
       use_rekernel: ${{ inputs.use_rekernel }}
       supp_op: ${{ inputs.supp_op }}
       virtualization_support: ${{ inputs.virtualization_support }}
-      use_custom_external_modules: ${{ inputs.use_custom_external_modules }}
       custom_external_modules: ${{ inputs.custom_external_modules }}
       upload_aux_artifacts: ${{ inputs.upload_aux_artifacts }}
       trigger_release: false

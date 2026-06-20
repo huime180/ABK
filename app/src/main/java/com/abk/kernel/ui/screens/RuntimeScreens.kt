@@ -1253,7 +1253,6 @@ private fun runtimeFeatureLabel(key: String): String = when (key) {
     "use_rekernel" -> "Re-Kernel"
     "enable_susfs" -> "SUSFS"
     "supp_op" -> "SukiSU SUS_SU"
-    "zram_full_algo" -> stringResource(R.string.runtime_feature_zram_full_algo)
     "cancel_susfs" -> stringResource(R.string.runtime_feature_cancel_susfs)
     else -> key
 }

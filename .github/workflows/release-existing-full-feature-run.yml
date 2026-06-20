@@ -144,15 +144,13 @@ jobs:
           build_time="$(metadata_value build_time "Sun Dec 01 08:10:00 UTC 2024")"
           susfs_enabled="$(metadata_value susfs_enabled "true")"
           use_zram="$(metadata_value use_zram "true")"
-          zram_full_algo="$(metadata_value zram_full_algo "true")"
-          zram_extra_algos="$(metadata_value zram_extra_algos "无")"
+          zram_extra_algos="$(metadata_value zram_extra_algos "full")"
           use_bbg="$(metadata_value use_bbg "true")"
           use_ddk="$(metadata_value use_ddk "true")"
           use_kpm="$(metadata_value use_kpm "true")"
           kpm_password="$(metadata_value kpm_password "默认")"
           use_rekernel="$(metadata_value use_rekernel "true")"
           supp_op="$(metadata_value supp_op "true")"
-          use_custom_external_modules="$(metadata_value use_custom_external_modules "false")"
           custom_external_modules="$(metadata_value custom_external_modules "无")"
           use_ntsync="$(metadata_value use_ntsync "true")"
           use_networking="$(metadata_value use_networking "true")"
@@ -215,8 +213,7 @@ jobs:
           | 构建时间 | $build_time |
           | SUSFS 状态 | $susfs_enabled |
           | ZRAM 增强 | $use_zram |
-          | ZRAM 完整算法 | $zram_full_algo |
-          | ZRAM 额外算法 | $zram_extra_algos |
+          | ZRAM 算法 | $zram_extra_algos |
           | BBG 补丁 | $use_bbg |
           | DDK LSM | $use_ddk |
           | NTsync 补丁 | $use_ntsync |
@@ -226,7 +223,6 @@ jobs:
           | Re-Kernel | $use_rekernel |
           | 虚拟化支持 | $virtualization_support |
           | 一加 8E 支持 | $supp_op |
-          | 自定义注入 | $use_custom_external_modules |
           | 自定义注入参数列表 | $custom_external_modules |
 
           > Android 16 / 6.12 构建会自动关闭 ZRAM 增强与 ZRAM 完整算法；虚拟化支持在 6.12 上使用开关模式。

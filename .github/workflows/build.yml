@@ -33,6 +33,13 @@ on:
       custom_ref:
         required: false
         type: string
+      add_defconfig:
+        required: false
+        type: string
+      stock_config:
+        required: false
+        type: string
+        default: ""
       version:
         required: false
         type: string
@@ -87,11 +94,7 @@ on:
         default: "off"
 
       # ==================== ZRAM 扩展选项 ====================
-      zram_full_algo:
-        required: false
-        type: boolean
-        default: false
-      zram_extra_algos:
+      zram_algos:
         required: false
         type: string
         default: ""
@@ -103,10 +106,6 @@ on:
         default: ""
 
       # ==================== 自定义外部模块 ====================
-      use_custom_external_modules:
-        required: false
-        type: boolean
-        default: false
       custom_external_modules:
         required: false
         type: string
@@ -146,8 +145,17 @@ jobs:
           set -euo pipefail
 
           effective_use_zram="${{ inputs.use_zram }}"
-          effective_zram_full_algo="${{ inputs.zram_full_algo }}"
-          effective_zram_extra_algos="${{ inputs.zram_extra_algos || '' }}"
+          zram_algos="${{ inputs.zram_algos || '' }}"
+          if [ "$zram_algos" = "full" ]; then
+            effective_zram_full_algo="true"
+            effective_zram_extra_algos=""
+          elif [ -n "$zram_algos" ]; then
+            effective_zram_full_algo="false"
+            effective_zram_extra_algos="$zram_algos"
+          else
+            effective_zram_full_algo="false"
+            effective_zram_extra_algos=""
+          fi
 
           if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
             if [ "$effective_use_zram" = "true" ] || [ "$effective_zram_full_algo" = "true" ] || [ -n "$effective_zram_extra_algos" ]; then
@@ -170,7 +178,8 @@ jobs:
           fi
           echo "EFFECTIVE_KSU_BRANCH=$effective_ksu_branch" >> "$GITHUB_ENV"
 
-          zram_extra_label="${effective_zram_extra_algos:-无}"
+          zram_label="${zram_algos:-无}"
+          if [ "$effective_zram_full_algo" = "true" ]; then zram_label="完整算法"; fi
 
           echo "========================================"
           echo "       内核构建配置摘要"
@@ -183,10 +192,10 @@ jobs:
           echo "KSU 分支      : $effective_ksu_branch"
           echo "管理器包名    : ${{ inputs.manager_package || 'app/signing/abk-manager-cert.env' }}"
           echo "构建时间      : ${{ inputs.build_time }}"
+          echo "额外内核参数   : $(printf "%s" "${{ inputs.add_defconfig }}" | tr '\n' ' ')"
           echo "SUSFS 状态    : ${{ inputs.enable_susfs }}"
           echo "ZRAM 增强     : $effective_use_zram"
-          echo "ZRAM 完整算法 : $effective_zram_full_algo"
-          echo "ZRAM 额外算法 : $zram_extra_label"
+          echo "ZRAM 算法     : $zram_label"
           echo "BBG 补丁      : ${{ inputs.use_bbg }}"
           echo "DDK LSM       : ${{ inputs.use_ddk }}"
           echo "NTsync 补丁   : ${{ inputs.use_ntsync }}"
@@ -195,8 +204,8 @@ jobs:
           echo "KPM 密码      : ${{ inputs.kpm_password && '已自定义' || '默认' }}"
           echo "Re-Kernel     : ${{ inputs.use_rekernel }}"
           echo "虚拟化支持   : ${{ inputs.virtualization_support }}"
-          echo "自定义注入    : ${{ inputs.use_custom_external_modules }}"
-          echo "Stock Config  : 自动检测 config/stock_defconfig"
+          echo "自定义注入    : ${{ inputs.custom_external_modules }}"
+          echo "Stock Config  : ${{ inputs.stock_config }}"
           echo "========================================"
 
       - name: 校验自定义内核版本组合
@@ -537,21 +546,34 @@ jobs:
           apt_update_retry
           sudo apt-get install -y ccache python3 git curl build-essential libssl-dev bison flex libelf-dev dwarves
 
-      - name: 配置 ccache
+      - name: 配置 cache
         run: |
-          mkdir -p ~/.cache/bazel
+          mkdir -p ~/.cache/bazel out/cache
           ccache --version
-          ccache --max-size=2G
+          ccache --max-size=4G
           ccache --set-config=compression=true
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          export CCACHE_DIR="$HOME/.ccache"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$CCACHE_DIR"
 
-      - name: 恢复 ccache 缓存
+          CACHE_CODE=$(
+            [[ '${{ inputs.enable_susfs }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_ddk }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_ntsync }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.use_rekernel }}' == 'true' ]] && echo -n 1 || echo -n 0
+            [[ '${{ inputs.virtualization_support }}' != 'off' ]] && echo -n 1 || echo -n 0
+          )
+          echo "CACHE_CODE=$CACHE_CODE" >> $GITHUB_ENV
+
+      - name: 恢复 cache
         uses: actions/cache@v5
         with:
-          path: ~/.ccache
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-${{ github.sha }}
+          path: |
+            ${{ env.CCACHE_DIR }}
+            ~/.cache/bazel
+          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-${{ env.CACHE_CODE }}
           restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
+            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-cache-
 
       - name: 缓存工具链
         id: cache-toolchain
@@ -639,7 +661,7 @@ jobs:
           git clone https://github.com/Numbersf/Action-Build.git --depth=1
 
       - name: 克隆自定义外部模块
-        if: inputs.use_custom_external_modules
+        if: inputs.custom_external_modules != ''
         env:
           CUSTOM_EXTERNAL_MODULES: ${{ inputs.custom_external_modules }}
         run: |
@@ -955,41 +977,19 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-      - name: 应用 Stock Config 伪装
+      - name: 使用 Stock Config 作为 defconfig 模板参与构建
+        if: inputs.stock_config != ''
         run: |
-          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
-          STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
+            STOCK_SRC="$GITHUB_WORKSPACE/config/stock_config/${{ inputs.stock_config }}_stock_config"
+            DEFCONFIG_DST="$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig"
 
-          if [ ! -f "$STOCK_SRC" ]; then
-            echo "未检测到 $STOCK_SRC，跳过 Stock Config 伪装。"
-            exit 0
-          fi
+            if [ ! -f "$STOCK_SRC" ]; then
+              echo "::error::未找到 $STOCK_SRC"
+              exit 1
+            fi
 
-          mkdir -p "$(dirname "$STOCK_DST")"
-          if ! cp "$STOCK_SRC" "$STOCK_DST"; then
-            echo "::error::复制 stock_defconfig 失败: $STOCK_SRC -> $STOCK_DST"
-            exit 1
-          fi
-          echo "已复制 stock_defconfig -> $STOCK_DST"
-
-          NEW_RULE='$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE'
-          OLD_RULE='$(obj)/config_data: $(KCONFIG_CONFIG) FORCE'
-          TARGET_MAKEFILE="$KERNEL_ROOT/common/kernel/Makefile"
-
-          if [ ! -f "$TARGET_MAKEFILE" ]; then
-            echo "::error::未找到 $TARGET_MAKEFILE"
-            exit 1
-          fi
-
-          if grep -qF "$NEW_RULE" "$TARGET_MAKEFILE"; then
-            echo "config_data 规则已是 stock_defconfig，跳过。"
-          elif grep -qF "$OLD_RULE" "$TARGET_MAKEFILE"; then
-            sed -i 's|$(obj)/config_data: $(KCONFIG_CONFIG) FORCE|$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE|' "$TARGET_MAKEFILE"
-            echo "已替换 config_data 规则: $TARGET_MAKEFILE"
-          else
-            echo "::error::未在 $TARGET_MAKEFILE 找到规则: $OLD_RULE"
-            exit 1
-          fi
+            cp "$STOCK_SRC" "$DEFCONFIG_DST"
+            echo "已将 $STOCK_SRC 替换为 gki_defconfig → 内核将按 stock_config 为模板构建"     
 
       - name: 提取实际子版本号
         run: |
@@ -2451,7 +2451,6 @@ jobs:
           echo "虚拟化支持集成完成"
 
       - name: 应用 Unicode 绕过修复
-        if: inputs.enable_susfs
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           if [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
@@ -2577,7 +2576,7 @@ jobs:
           fi
 
           # ---- ZRAM 完整算法支持 ----
-          if [ "${EFFECTIVE_ZRAM_FULL_ALGO:-false}" = "true" ]; then
+          if [ "${EFFECTIVE_ZRAM_EXTRA_ALGOS:-false}" = "true" ]; then
             echo "启用 ZRAM 完整算法支持..."
             cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_CRYPTO_LZO=y
@@ -2753,6 +2752,10 @@ jobs:
           PY
           fi
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
+          # 如果启用了 stock_config，则删除 defconfig 中的 CONFIG_LSM
+          if [ "${{ inputs.stock_config }}" != '']; then
+             sed -i '/^CONFIG_LSM=/d' "$DEFCONFIG"
+          fi
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
       - name: 添加 DDK 防格机 LSM
@@ -2825,7 +2828,7 @@ jobs:
           grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG"
 
       - name: 执行自定义外部模块 (after_patch)
-        if: inputs.use_custom_external_modules
+        if: inputs.custom_external_modules != ''
         env:
           CUSTOM_EXTERNAL_MODULE_STAGE: after_patch
           ABK_BUILD_ANDROID_VERSION: ${{ inputs.android_version }}
@@ -2838,7 +2841,7 @@ jobs:
           ABK_BUILD_VERSION: ${{ inputs.version }}
           ABK_BUILD_TIME: ${{ inputs.build_time }}
           ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
-          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_algos }}
           ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
           ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
           ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
@@ -2848,7 +2851,6 @@ jobs:
           ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
           ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
           ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
-          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
           export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
@@ -2889,16 +2891,39 @@ jobs:
       - name: 配置内核选项
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          ensure_defconfig_value() {
+            local cfg="$1"
+            local value="$2"
+            local line="${cfg}=${value}"
+
+            if [ "$value" = "n" ]; then
+              line="# ${cfg} is not set"
+            fi
+
+            if grep -qxF "$line" "$DEFCONFIG"; then
+              return 0
+            fi
+
+            if grep -Eq "^${cfg}=|^# ${cfg} is not set$" "$DEFCONFIG"; then
+              sed -i -E "s|^${cfg}=.*|${line}|; s|^# ${cfg} is not set$|${line}|" "$DEFCONFIG"
+            else
+              echo "$line" >> "$DEFCONFIG"
+            fi
+          }
+
           set -euo pipefail
           kpm_kconfig_status="${ABK_KPM_KCONFIG_STATUS:-unknown}"
           kpm_kconfig_ready="${ABK_KPM_KCONFIG_READY:-false}"
           kpm_kconfig_path="${ABK_KPM_KCONFIG_PATH:-}"
 
+          cat >> "$DEFCONFIG" << 'EOF'
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          EOF
+  
           if [ "${{ inputs.ksu_variant }}" != "None" ]; then
             cat >> "$DEFCONFIG" << 'EOF'
           CONFIG_KSU=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
           EOF
           fi
 
@@ -2968,6 +2993,20 @@ jobs:
           fi
 
           sed -i 's/check_defconfig//' ./common/build.config.gki
+ 
+          if [ "${{ inputs.add_defconfig }}" != "" ]; then
+            echo "set custom kernel config:"
+            echo "${{ inputs.add_defconfig }}" | tr ' ' '\n' | while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if echo "$line" | grep -Eq "^CONFIG_[A-Za-z0-9_]+=.+$"; then
+              cfg=$(echo "$line" | cut -d= -f1)
+              val=$(echo "$line" | cut -d= -f2-)
+              echo "$cfg=$val"
+              ensure_defconfig_value "$cfg" "$val"
+              continue
+            fi
+            done
+          fi
 
       - name: 配置 KPM 超级密码
         if: inputs.use_kpm && inputs.kpm_password != '' && (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'ReSukiSU')
@@ -3080,7 +3119,7 @@ jobs:
           fi
 
       - name: 执行自定义外部模块 (before_build)
-        if: inputs.use_custom_external_modules
+        if: inputs.custom_external_modules != ''
         env:
           CUSTOM_EXTERNAL_MODULE_STAGE: before_build
           ABK_BUILD_ANDROID_VERSION: ${{ inputs.android_version }}
@@ -3093,7 +3132,7 @@ jobs:
           ABK_BUILD_VERSION: ${{ inputs.version }}
           ABK_BUILD_TIME: ${{ inputs.build_time }}
           ABK_BUILD_VIRTUALIZATION_SUPPORT: ${{ inputs.virtualization_support }}
-          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_extra_algos }}
+          ABK_BUILD_ZRAM_EXTRA_ALGOS: ${{ inputs.zram_algos }}
           ABK_FEATURE_USE_ZRAM: ${{ inputs.use_zram }}
           ABK_FEATURE_USE_BBG: ${{ inputs.use_bbg }}
           ABK_FEATURE_USE_DDK: ${{ inputs.use_ddk }}
@@ -3103,7 +3142,6 @@ jobs:
           ABK_FEATURE_USE_REKERNEL: ${{ inputs.use_rekernel }}
           ABK_FEATURE_ENABLE_SUSFS: ${{ inputs.enable_susfs }}
           ABK_FEATURE_SUPP_OP: ${{ inputs.supp_op }}
-          ABK_FEATURE_ZRAM_FULL_ALGO: ${{ inputs.zram_full_algo }}
         run: |
           set -euo pipefail
           export ABK_BUILD_KSU_BRANCH="${EFFECTIVE_KSU_BRANCH:-$ABK_BUILD_KSU_BRANCH}"
@@ -4391,7 +4429,7 @@ jobs:
           PY
 
       - name: 校验 ABK 管理器桥接
-        if: inputs.use_custom_external_modules && inputs.ksu_variant != 'None'
+        if: inputs.custom_external_modules != '' && inputs.ksu_variant != 'None'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euo pipefail
@@ -4515,6 +4553,7 @@ jobs:
           command: |
             echo "当前 KSU 最新提交日期: ${KSU_LATEST_COMMIT_DATE}"
             echo "当前 SUSFS 最新提交日期: ${SUSFS_LATEST_COMMIT_DATE}"
+            echo "如果日期不同或相差过远则补丁失效、编译失败"
             set -ex
             cd "$KERNEL_ROOT"
 
@@ -4733,6 +4772,8 @@ jobs:
             if [ -f "build/build.sh" ]; then
               LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
               strings "out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist/Image" | grep 'Linux version'
+              echo "ccache状态："
+              ccache -s
             else
               # 提取 gki_defconfig 修改到 fragment，避免 bazel trim 检查失败
               FRAG="common/arch/arm64/configs/ksu.fragment"
@@ -4749,14 +4790,14 @@ jobs:
               if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
                 LTO_FLAG="--lto=none"
               fi
-              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
+              tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=local $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
               strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
+              echo "=== disk_cache 信息 ==="
+              du -sh /home/runner/.cache/bazel 2>/dev/null || echo "no cache"
+              ls -l /home/runner/.cache/bazel 2>/dev/null || echo "no cache"
             fi
-
-            echo "当前 KSU 最新提交日期: ${KSU_LATEST_COMMIT_DATE}"
-            echo "当前 SUSFS 最新提交日期: ${SUSFS_LATEST_COMMIT_DATE}"
-            echo "如果日期不同或相差过远则补丁失效、编译失败"
-
+            echo "内核编译完成！"
+  
       - name: 应用 KPM 补丁 (SukiSU/ReSukiSU)
         if: inputs.use_kpm && (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'ReSukiSU')
         env:
