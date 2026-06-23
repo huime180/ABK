@@ -977,20 +977,54 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-      - name: 使用 Stock Config 作为 defconfig 模板参与构建
+      - name: 使用 Stock Config 修改 defconfig
         if: inputs.stock_config != ''
         run: |
-            STOCK_SRC="$GITHUB_WORKSPACE/config/stock_config/${{ inputs.stock_config }}_stock_config"
-            DEFCONFIG_DST="$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig"
+          STOCK_SRC="$GITHUB_WORKSPACE/config/stock_config/${{ inputs.stock_config }}_stock_config"
+          DEFCONFIG="$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig"
 
-            if [ ! -f "$STOCK_SRC" ]; then
-              echo "::error::未找到 $STOCK_SRC"
-              exit 1
-            fi
+          if [ ! -f "$STOCK_SRC" ]; then
+            echo "::error::未找到 $STOCK_SRC"
+            exit 1
+          fi
 
-            cp "$STOCK_SRC" "$DEFCONFIG_DST"
-            echo "已将 $STOCK_SRC 替换为 gki_defconfig → 内核将按 stock_config 为模板构建"     
+          # 读取 stock_config 到内存（关联数组）
+          declare -A STOCK_MAP
+          while IFS= read -r line; do
+            case "$line" in
+              CONFIG_*=*)
+                key="${line%%=*}"
+                val="${line#*=}"
+                STOCK_MAP["$key"]="$val"
+                ;;
+            esac
+          done < "$STOCK_SRC"
 
+          TMP_FILE=$(mktemp)
+
+          # 遍历 defconfig，每一行检查是否需要替换
+          while IFS= read -r line; do
+            case "$line" in
+              CONFIG_*=*|#\ CONFIG_*is\ not\ set)
+                # 提取 CONFIG 名称
+                cfg=$(echo "$line" | sed -E 's/^# (CONFIG_[A-Za-z0-9_]+) is not set/\1/; s/^(CONFIG_[A-Za-z0-9_]+)=.*/\1/')
+                if [[ -n "${STOCK_MAP[$cfg]}" ]]; then
+                  echo "${cfg}=${STOCK_MAP[$cfg]}" >> "$TMP_FILE"
+                  echo "  替换: $cfg=${STOCK_MAP[$cfg]}"
+                else
+                  echo "$line" >> "$TMP_FILE"
+                fi
+                ;;
+              *)
+                echo "$line" >> "$TMP_FILE"
+                ;;
+            esac
+          done < "$DEFCONFIG"
+
+          mv "$TMP_FILE" "$DEFCONFIG"
+
+          echo "合并完成 → defconfig 已按 stock_config 更新（仅替换已有项）"
+  
       - name: 提取实际子版本号
         run: |
           ACTUAL_SUBLEVEL="${{ inputs.sub_level }}"
@@ -2418,14 +2452,7 @@ jobs:
             fi
           }
 
-          enable_config_if_defined() {
-            local cfg="$1"
-            if config_defined "$cfg"; then
-              enable_config "$cfg"
-            else
-              echo "  当前内核未定义: $cfg，跳过"
-            fi
-          }
+          
 
           # 必要配置
           enable_required_config CONFIG_SYSVIPC
@@ -2752,10 +2779,6 @@ jobs:
           PY
           fi
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
-          # 如果启用了 stock_config，则删除 defconfig 中的 CONFIG_LSM
-          if [ "${{ inputs.stock_config }}" != '']; then
-             sed -i '/^CONFIG_LSM=/d' "$DEFCONFIG"
-          fi
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
       - name: 添加 DDK 防格机 LSM
