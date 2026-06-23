@@ -57,7 +57,7 @@ on:
         type: boolean
         default: true
       use_zram:
-        description: "GKI 启用 ZRAM 增强算法（6.12 会自动关闭）"
+        description: "GKI 启用 ZRAM 增强算法（6.12 跳过 legacy LZ4K 栈，保留 zstdp）"
         required: false
         type: boolean
         default: true
