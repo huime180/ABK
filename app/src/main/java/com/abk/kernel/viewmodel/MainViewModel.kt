@@ -34,6 +34,7 @@ import com.abk.kernel.utils.FailureLogExtractor
 import com.abk.kernel.utils.NotificationUtils
 import com.abk.kernel.utils.WorkflowStepI18n
 import com.abk.kernel.utils.RootUtils
+import com.abk.kernel.utils.StockConfigManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,14 @@ data class MainUiState(
     val validatingCustomExternalModule: Boolean = false,
     val customExternalModuleError: String? = null,
     val recommendedBuildConfig: KernelBuildConfig? = null,
+    // Stock Config — three methods to obtain kernel config
+    val stockConfigDeviceInfo: StockConfigManager.DeviceInfo? = null,
+    val stockConfigExtracting: Boolean = false,
+    val stockConfigExtractMethod: String = "",  // "proc" | "bootimg" | "repo"
+    val stockConfigOutput: List<String> = emptyList(),
+    val stockConfigLastPath: String? = null,
+    val stockConfigError: String? = null,
+    val cachedStockConfigs: List<File> = emptyList(),
     val workflowEnablementPrompt: WorkflowEnablementPrompt? = null,
     val buildParameterSummaries: Map<Long, BuildParameterSummary> = emptyMap(),
     val loadingBuildParameterRunIds: Set<Long> = emptySet(),
@@ -736,6 +745,197 @@ class MainViewModel @JvmOverloads constructor(
                     buildConfig = initialConfig ?: it.buildConfig
                 )
             }
+        }
+    }
+
+    // ── Stock Config (Device Recognition + Boot Config Extraction) ────────
+
+    /** Detect the current device model and store it in state. */
+    fun detectDeviceModel() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val info = StockConfigManager.detectDevice()
+            val cached = StockConfigManager.listCachedConfigs(getApplication())
+            val matchingPath = cached.firstOrNull { file ->
+                val id = StockConfigManager.configIdFromFile(file)
+                id == info.configId || id == info.matchedManifest
+            }
+            _uiState.update {
+                it.copy(
+                    stockConfigDeviceInfo = info,
+                    stockConfigError = null,
+                    cachedStockConfigs = cached,
+                    stockConfigLastPath = matchingPath?.absolutePath
+                )
+            }
+        }
+    }
+
+    // ── Method 1: Extract from /proc/config ─────────────────────────
+
+    /** Extract kernel config from /proc/config. Requires login + fork, optionally root. */
+    fun extractStockConfigFromProc() {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
+        val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "proc",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.extractFromProcConfig(app, device.configId) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishAndPushStockConfig(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 2: Extract from boot.img file ─────────────────────────
+
+    /** Extract from a boot.img via SAF URI. Requires login + fork + root. */
+    fun extractStockConfigFromBootImageUri(uri: android.net.Uri) {
+        if (_uiState.value.stockConfigExtracting) return
+        if (!_uiState.value.isLoggedIn || _uiState.value.forkRepo == null) {
+            _uiState.update { it.copy(stockConfigError = "请先完成 GitHub 登录并 fork 仓库") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "bootimg",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val localPath = StockConfigManager.copyContentUriToLocal(app, uri)
+                    ?: throw Exception("无法读取选中的 boot.img 文件")
+                val device = _uiState.value.stockConfigDeviceInfo ?: StockConfigManager.detectDevice()
+                val result = StockConfigManager.extractFromBootImageFile(
+                    app, localPath, device.configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                try { java.io.File(localPath).delete() } catch (_: Exception) {}
+                finishAndPushStockConfig(app, result, device.configId)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    // ── Method 3: Fetch from repository ──────────────────────────────
+
+    /** Fetch stock_config for deviceId from the remote upstream repo (no login needed). */
+    fun fetchStockConfigFromRepo(deviceId: String) {
+        if (_uiState.value.stockConfigExtracting) return
+        val user = _uiState.value.forkRepo?.owner?.login
+            ?: _uiState.value.user?.login ?: ""
+        val repo = _uiState.value.forkRepo?.name ?: "ABK"
+        val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(stockConfigExtracting = true, stockConfigExtractMethod = "repo",
+                    stockConfigOutput = emptyList(), stockConfigError = null)
+            }
+            try {
+                val app = getApplication<Application>()
+                val result = StockConfigManager.fetchFromRepository(
+                    app, user, repo, branch, deviceId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                finishStockConfigExtraction(app, result)
+            } catch (e: Exception) {
+                _uiState.update { it.copy(stockConfigExtracting = false, stockConfigError = e.message) }
+            }
+        }
+    }
+
+    /** Shared completion for method 3 (no push). */
+    private fun finishStockConfigExtraction(app: Application, result: StockConfigManager.StockConfigResult) {
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigExtracting = false,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(result.deviceInfo.configId)
+        }
+    }
+
+    /** Completion for methods 1 & 2: also push to fork repo. */
+    private suspend fun finishAndPushStockConfig(
+        app: Application,
+        result: StockConfigManager.StockConfigResult,
+        configId: String
+    ) {
+        // Update local state first
+        val cached = StockConfigManager.listCachedConfigs(app)
+        _uiState.update {
+            it.copy(
+                stockConfigDeviceInfo = result.deviceInfo,
+                stockConfigLastPath = result.configPath,
+                cachedStockConfigs = cached,
+                stockConfigError = if (result.success) null else result.output.lastOrNull()
+            )
+        }
+        if (result.success && result.configPath != null) {
+            applyStockConfigToBuildConfig(configId)
+            // Push to fork repo
+            val token = prefs.accessToken.first() ?: ""
+            if (token.isNotBlank()) {
+                val owner = _uiState.value.forkRepo?.owner?.login
+                    ?: _uiState.value.user?.login ?: return
+                val repo = _uiState.value.forkRepo?.name ?: return
+                val branch = _uiState.value.forkRepo?.defaultBranch ?: "main"
+                val pushSuccess = StockConfigManager.pushStockConfigToFork(
+                    app, token, owner, repo, branch, configId
+                ) { line ->
+                    _uiState.update { it.copy(stockConfigOutput = it.stockConfigOutput + line) }
+                }
+                if (!pushSuccess) {
+                    _uiState.update {
+                        it.copy(stockConfigError = "提取成功但推送到仓库失败，请检查网络或权限")
+                    }
+                }
+            }
+        }
+        _uiState.update { it.copy(stockConfigExtracting = false) }
+    }
+
+    /** Apply a cached stock config to the current build config. */
+    fun applyStockConfigToBuildConfig(configId: String) {
+        val path = StockConfigManager.stockConfigPath(getApplication(), configId)
+        if (!path.isFile) return
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = configId),
+                stockConfigLastPath = path.absolutePath,
+                stockConfigError = null
+            )
+        }
+    }
+
+    /** Clear the stock config selection. */
+    fun clearStockConfig() {
+        val config = _uiState.value.buildConfig
+        _uiState.update {
+            it.copy(
+                buildConfig = config.copy(stockConfig = ""),
+                stockConfigLastPath = null
+            )
         }
     }
 
@@ -4688,6 +4888,7 @@ internal fun encodeBuildPlanPayload(
     writer.writeVarInt(config.toBuildPlanFeatureMask())
     writer.writeString(config.version)
     writer.writeString(config.buildTime)
+    writer.writeString(config.addDefconfig)
     writer.writeString(config.zramExtraAlgos)
     writer.writeString(config.kpmPassword)
     writer.writeString(config.customRef)
@@ -4786,6 +4987,7 @@ internal fun decodeBuildPlanPayload(
     val featureMask = reader.readVarInt()
     val versionName = reader.readString()
     val buildTime = reader.readString()
+    val addDefconfig = reader.readString()
     val zramExtraAlgos = reader.readString()
     val kpmPassword = reader.readString()
     val customRef = if (version >= BUILD_PLAN_CUSTOM_REF_VERSION) {
@@ -4827,6 +5029,7 @@ internal fun decodeBuildPlanPayload(
         kernelsuBranch = ksuBranch,
         version = versionName,
         buildTime = buildTime,
+        addDefconfig = addDefconfig,
         useZram = featureMask.hasBuildPlanFlag(0),
         useBbg = featureMask.hasBuildPlanFlag(1),
         useDdk = featureMask.hasBuildPlanFlag(2),
@@ -5002,6 +5205,7 @@ private const val SUMMARY_LABEL_PATCH_LEVEL = "\u8865\u4e01\u7ea7\u522b"
 private const val SUMMARY_LABEL_KSU_VARIANT = "ksu\u53d8\u4f53"
 private const val SUMMARY_LABEL_KSU_BRANCH = "ksu\u5206\u652f"
 private const val SUMMARY_LABEL_BUILD_TIME = "\u6784\u5efa\u65f6\u95f4"
+private const val SUMMARY_LABEL_ADD_DEFCONFIG = "\u989d\u5916\u5185\u6838\u53c2\u6570"
 private const val SUMMARY_LABEL_SUSFS_STATUS = "susfs\u72b6\u6001"
 private const val SUMMARY_LABEL_ZRAM = "zram\u589e\u5f3a"
 private const val SUMMARY_LABEL_ZRAM_FULL_ALGO = "zram\u5b8c\u6574\u7b97\u6cd5"
@@ -5071,6 +5275,7 @@ internal fun parseBuildParameterSummary(
         ksuVariant = values["ksuVariant"].orEmpty(),
         ksuBranch = values["ksuBranch"].orEmpty(),
         buildTime = values["buildTime"].orEmpty(),
+        addDefconfig = values["addDefconfig"].orEmpty(),
         susfsEnabled = values["susfsEnabled"].orEmpty(),
         zramEnabled = values["zramEnabled"].orEmpty(),
         zramFullAlgo = values["zramFullAlgo"].orEmpty(),
@@ -5106,6 +5311,7 @@ private fun normalizeBuildSummaryLabel(label: String): String? {
         compact.contains(SUMMARY_LABEL_KSU_VARIANT) -> "ksuVariant"
         compact.contains(SUMMARY_LABEL_KSU_BRANCH) -> "ksuBranch"
         compact.contains(SUMMARY_LABEL_BUILD_TIME) -> "buildTime"
+        compact.contains(SUMMARY_LABEL_ADD_DEFCONFIG) -> "addDefconfig"
         compact.contains(SUMMARY_LABEL_SUSFS_STATUS) -> "susfsEnabled"
         compact.contains(SUMMARY_LABEL_ZRAM) -> "zramEnabled"
         compact.contains(SUMMARY_LABEL_ZRAM_FULL_ALGO) -> "zramFullAlgo"
@@ -5305,6 +5511,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "kernelsu_branch" to config.kernelsuBranch,
         "version" to config.version,
         "build_time" to config.buildTime,
+        "add_defconfig" to config.addDefconfig,
         "use_zram" to config.useZram.toString(),
         "use_bbg" to config.useBbg.toString(),
         "use_ddk" to config.useDdk.toString(),
@@ -5318,7 +5525,7 @@ internal fun KernelBuildConfig.toInputMap(): Map<String, String> {
         "zram_extra_algos" to config.zramExtraAlgos,
         "kpm_password" to config.kpmPassword,
         "virtualization_support" to config.virtualizationSupport,
-        "use_custom_external_modules" to config.useCustomExternalModules.toString(),
+        "stock_config" to config.stockConfig.trim(),
         "custom_ref" to if (config.kernelsuBranch == KSU_BRANCH_CUSTOM) {
             config.customRef.trim()
         } else {

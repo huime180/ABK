@@ -252,6 +252,8 @@
     <string name="build_custom_version_optional">自定义版本名 (可选)</string>
     <string name="build_custom_time_optional">自定义构建时间 (可选)</string>
     <string name="build_time_placeholder">留空/N=当前 UTC 时间</string>
+    <string name="build_add_defconfig">额外内核参数 (可选)</string>
+    <string name="build_add_defconfig_placeholder">如: CONFIG_TMPFS_XATTR=y CONFIG_USER_NS=n</string>
     <string name="build_add_queue">加入队列</string>
     <string name="build_queue_title">构建队列</string>
     <string name="build_plan_library">方案库</string>
@@ -464,6 +466,7 @@
     <string name="flash_unknown">未知</string>
     <string name="flash_version_params">版本参数</string>
     <string name="flash_build_time">构建时间</string>
+    <string name="flash_add_defconfig">额外内核参数</string>
     <string name="flash_ksu_variant">KSU 变体</string>
     <string name="flash_ksu_branch">KSU 分支</string>
     <string name="flash_susfs_status">SUSFS 状态</string>
@@ -1216,4 +1219,6 @@
     <string name="gh_root_must_be_object">根节点必须是 JSON 对象</string>
     <string name="gh_missing_module_name">缺少 ABK_MODULE_NAME</string>
     <string name="gh_catalog_fallback_name">模块仓库</string>
+    <string name="build_stock_config_title">机型识别 &amp; Stock Config</string>
+    <string name="build_stock_config_desc">① 从 /proc/config 读取 (需登录+fork) ② 从 boot.img 解包 (需登录+fork+root) ③ 从远程仓库获取 (无需登录)。提取后自动推送到 fork 仓库的 config/stock_config/ 目录。</string>
 </resources>
